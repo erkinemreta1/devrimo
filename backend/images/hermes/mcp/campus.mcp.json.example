@@ -1,0 +1,25 @@
+{
+  "_comment": "Template only. Each entry below is a placeholder for a real MCP server that doesn't exist yet in this repo — none of frontend/lib/campus.ts's five campus tools (ODTUClass, catalog, calendar, library, campus) have a backend implementation. Fill in a real url/command per tool, rename this file to campus.mcp.json, and copy it into the image at build time (see the Dockerfile). Until then, ship the image without this file; Hermes runs fine with its built-in tools alone.",
+  "mcpServers": {
+    "odtuclass": {
+      "url": "${CAMPUS_MCP_ODAS_URL}",
+      "description": "Announcements, assignments, and course materials"
+    },
+    "catalog": {
+      "url": "${CAMPUS_MCP_CATALOG_URL}",
+      "description": "Course codes, credits, and prerequisites"
+    },
+    "calendar": {
+      "url": "${CAMPUS_MCP_CALENDAR_URL}",
+      "description": "Add/drop deadlines, exams, and holidays"
+    },
+    "library": {
+      "url": "${CAMPUS_MCP_LIBRARY_URL}",
+      "description": "Library hours, holds, and article search"
+    },
+    "campus": {
+      "url": "${CAMPUS_MCP_CAMPUS_URL}",
+      "description": "Buildings, ring roads, and study spots"
+    }
+  }
+}
