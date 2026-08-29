@@ -36,10 +36,16 @@ class DockerAgentRuntime:
         self._ensure_network()
 
     def _ensure_network(self) -> None:
+        # Falls back to creating this network only if it doesn't exist yet —
+        # in the normal docker-compose setup it's pre-created there (with
+        # this exact name; see the comment on `devrimo-agents` in
+        # docker-compose.yml) so this path only matters for bare `docker
+        # run`/standalone use. Plain bridge, not `internal=True`: agents
+        # need outbound access to reach AGENT_OPENAI_BASE_URL.
         try:
             self._client.networks.get(self._settings.docker_network)
         except NotFound:
-            self._client.networks.create(self._settings.docker_network, driver="bridge", internal=True)
+            self._client.networks.create(self._settings.docker_network, driver="bridge")
 
     async def _run(self, fn, /, *args, **kwargs):
         return await asyncio.to_thread(fn, *args, **kwargs)

@@ -44,6 +44,7 @@ services:
 networks:
   devrimo-internal:
     # Postgres <-> broker only. Agent containers are never attached here.
+    name: devrimo-internal
     driver: bridge
   devrimo-agents:
     # Broker <-> per-user Hermes containers. No inbound from the host and no
@@ -54,6 +55,14 @@ networks:
     # allowlist (model endpoint + campus MCP servers only) in front of this
     # network and flip it to `internal: true`; see the plan's
     # "Isolation & trust" section for why.
+    #
+    # Named explicitly (not left to Compose's default `<project>_...`
+    # prefixing) because app/agents/docker_runtime.py looks this network up
+    # by the literal DOCKER_NETWORK setting via the Docker SDK, which
+    # doesn't know about Compose's project-name aliasing. If this name and
+    # DOCKER_NETWORK ever diverge, the broker ends up on a different network
+    # than the agent containers it creates.
+    name: devrimo-agents
     driver: bridge
 
 volumes:
