@@ -17,9 +17,11 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import { useLocale } from "@/components/locale-provider";
 
 export function SettingsClient() {
-  const { agent, isLoading, start, stop, destroy, provision, refetch } = useAgent();
+  const { pick } = useLocale();
+  const { agent, isLoading, ensureRunning, stop, destroy, refetch } = useAgent();
 
   async function run(action: () => Promise<unknown>, success: string) {
     try {
@@ -34,14 +36,14 @@ export function SettingsClient() {
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-col gap-6 p-6">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
-        <p className="text-sm text-muted-foreground">Manage your dedicated Hermes agent.</p>
+        <h1 className="text-2xl font-semibold tracking-tight">{pick({ tr: "Ayarlar", en: "Settings" })}</h1>
+        <p className="text-sm text-muted-foreground">{pick({ tr: "Kişisel asistanının çalışma alanını yönet.", en: "Manage your assistant's private workspace." })}</p>
       </div>
 
       <Card>
         <CardHeader>
-          <CardTitle>Agent</CardTitle>
-          <CardDescription>One isolated container per account. Destroying it removes container data.</CardDescription>
+          <CardTitle>{pick({ tr: "Asistan", en: "Assistant" })}</CardTitle>
+          <CardDescription>{pick({ tr: "Her hesap için yalıtılmış bir çalışma alanı oluşturulur. Silme işlemi bu alandaki verileri kaldırır.", en: "Each account has an isolated workspace. Removing it also deletes its workspace data." })}</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
           {isLoading ? (
@@ -55,38 +57,41 @@ export function SettingsClient() {
                 <Badge>{agent.status}</Badge>
                 <span className="text-sm text-muted-foreground">ID {agent.id}</span>
               </div>
+              {agent.status === "error" && agent.error_detail ? (
+                <p className="text-sm text-destructive">{agent.error_detail}</p>
+              ) : null}
               <div className="flex flex-wrap gap-2">
                 <Button
                   variant="outline"
-                  disabled={start.isPending || agent.status === "running"}
-                  onClick={() => run(() => start.mutateAsync(), "Agent started")}
+                  disabled={ensureRunning.isPending || agent.status === "running"}
+                  onClick={() => run(() => ensureRunning.mutateAsync(), "Agent started")}
                 >
-                  Start
+                  {pick({ tr: "Başlat", en: "Start" })}
                 </Button>
                 <Button
                   variant="outline"
                   disabled={stop.isPending || agent.status !== "running"}
                   onClick={() => run(() => stop.mutateAsync(), "Agent stopped")}
                 >
-                  Stop
+                  {pick({ tr: "Durdur", en: "Stop" })}
                 </Button>
                 <AlertDialog>
                   <AlertDialogTrigger render={<Button variant="destructive" />}>
-                    Destroy
+                    {pick({ tr: "Sil", en: "Remove" })}
                   </AlertDialogTrigger>
                   <AlertDialogContent>
                     <AlertDialogHeader>
-                      <AlertDialogTitle>Destroy this agent?</AlertDialogTitle>
+                      <AlertDialogTitle>{pick({ tr: "Asistanın çalışma alanı silinsin mi?", en: "Remove this assistant workspace?" })}</AlertDialogTitle>
                       <AlertDialogDescription>
-                        This stops the container and deletes its volume. You can provision a new agent afterwards.
+                        {pick({ tr: "Çalışma alanı durdurulur ve içindeki veriler silinir. Daha sonra yeniden oluşturabilirsin.", en: "This stops the workspace and deletes its data. You can create a fresh one later." })}
                       </AlertDialogDescription>
                     </AlertDialogHeader>
                     <AlertDialogFooter>
-                      <AlertDialogCancel>Cancel</AlertDialogCancel>
+                      <AlertDialogCancel>{pick({ tr: "Vazgeç", en: "Cancel" })}</AlertDialogCancel>
                       <AlertDialogAction
                         onClick={() => run(() => destroy.mutateAsync(), "Agent destroyed")}
                       >
-                        Destroy
+                        {pick({ tr: "Çalışma alanını sil", en: "Remove workspace" })}
                       </AlertDialogAction>
                     </AlertDialogFooter>
                   </AlertDialogContent>
@@ -95,9 +100,9 @@ export function SettingsClient() {
             </>
           ) : (
             <div className="flex flex-col items-start gap-3">
-              <p className="text-sm text-muted-foreground">No agent is provisioned for this account.</p>
-              <Button onClick={() => run(() => provision.mutateAsync(), "Provisioning started")}>
-                Create agent
+              <p className="text-sm text-muted-foreground">{pick({ tr: "Bu hesap için henüz bir asistan çalışma alanı yok.", en: "This account does not have an assistant workspace yet." })}</p>
+              <Button onClick={() => run(() => ensureRunning.mutateAsync(), "Agent is ready")}>
+                {pick({ tr: "Asistanı hazırla", en: "Set up assistant" })}
               </Button>
             </div>
           )}

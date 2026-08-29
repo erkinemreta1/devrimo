@@ -48,19 +48,26 @@ export async function* streamChatCompletions(
       Accept: "text/event-stream",
       "Content-Type": "application/json",
       Authorization: `Bearer ${token}`,
-      ...(request.session_id ? { "X-Hermes-Session-Id": request.session_id } : {}),
     },
     body: JSON.stringify({
       model: request.model ?? "hermes",
       messages: request.messages.map(({ role, content }) => ({ role, content })),
-      session_id: request.session_id,
+      session_id: request.client_id,
       stream: true,
     }),
   });
 
   if (!response.ok || !response.body) {
     const payload = await response.text().catch(() => "");
-    throw new Error(payload || `Chat request failed (${response.status})`);
+    if (response.status === 409) {
+      throw new Error("Your agent is answering another message. Please wait.");
+    }
+    let message = payload;
+    try {
+      const parsed = JSON.parse(payload) as { detail?: string; message?: string; error?: string };
+      message = parsed.detail ?? parsed.message ?? parsed.error ?? payload;
+    } catch {}
+    throw new Error(message || `Chat request failed (${response.status})`);
   }
 
   const reader = response.body.getReader();

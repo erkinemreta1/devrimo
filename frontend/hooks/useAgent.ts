@@ -33,28 +33,10 @@ export function useAgent() {
   const query = useQuery({
     queryKey: ["agent"],
     queryFn: fetchAgent,
-    refetchInterval: (current) => {
-      const status = current.state.data?.status;
-      if (status === "provisioning" || status === "destroying") return 2000;
-      return false;
-    },
   });
 
-  const provision = useMutation({
-    mutationFn: async () => {
-      const response = await fetch("/api/agents/provision", { method: "POST" });
-      if (response.status === 409) {
-        const existing = await fetchAgent();
-        if (existing) return existing;
-      }
-      if (!response.ok) await parseError(response);
-      return response.json() as Promise<Agent>;
-    },
-    onSuccess: (agent) => queryClient.setQueryData(["agent"], agent),
-  });
-
-  const start = useMutation({
-    mutationFn: () => postAgent("/api/agents/start"),
+  const ensureRunning = useMutation({
+    mutationFn: () => postAgent("/api/agents/ensure-running"),
     onSuccess: (agent) => queryClient.setQueryData(["agent"], agent),
   });
 
@@ -74,10 +56,9 @@ export function useAgent() {
   return {
     agent: query.data ?? null,
     isLoading: query.isLoading,
-    error: query.error ?? provision.error ?? start.error ?? stop.error ?? destroy.error,
+    error: query.error ?? ensureRunning.error ?? stop.error ?? destroy.error,
     refetch: query.refetch,
-    provision,
-    start,
+    ensureRunning,
     stop,
     destroy,
   };

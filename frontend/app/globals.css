@@ -8,8 +8,8 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
-  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+  --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   --font-heading: var(--font-sans);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
@@ -67,37 +67,37 @@
 
 :root {
   /* METU identity: Pantone 186 red, Cool Gray 11, black */
-  --background: #f7f6f5;
-  --foreground: #111111;
-  --card: #ffffff;
-  --card-foreground: #111111;
+  --background: #f5f1e9;
+  --foreground: #181513;
+  --card: #fffdf8;
+  --card-foreground: #181513;
   --popover: #ffffff;
   --popover-foreground: #111111;
   --primary: #e31837;
   --primary-foreground: #ffffff;
-  --secondary: #eeeef0;
+  --secondary: #ebe5da;
   --secondary-foreground: #111111;
-  --muted: #eeeef0;
-  --muted-foreground: #717073;
-  --accent: #fde6ea;
+  --muted: #eee8de;
+  --muted-foreground: #6f6962;
+  --accent: #f8dfe3;
   --accent-foreground: #9b1026;
   --destructive: #e31837;
-  --border: #e4e3e5;
-  --input: #e4e3e5;
+  --border: #ddd5c8;
+  --input: #d8cfc1;
   --ring: #e31837;
   --chart-1: #e31837;
   --chart-2: #717073;
   --chart-3: #111111;
   --chart-4: #c41430;
   --chart-5: #9b1026;
-  --radius: 0.75rem;
-  --sidebar: #ffffff;
+  --radius: 1rem;
+  --sidebar: #eee8de;
   --sidebar-foreground: #111111;
   --sidebar-primary: #e31837;
   --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: #fde6ea;
+  --sidebar-accent: #f8dfe3;
   --sidebar-accent-foreground: #9b1026;
-  --sidebar-border: #e4e3e5;
+  --sidebar-border: #ddd5c8;
   --sidebar-ring: #e31837;
 }
 
@@ -141,9 +141,19 @@
   }
   body {
     @apply bg-background text-foreground;
+    background-image: radial-gradient(circle at 15% 10%, rgb(227 24 55 / 5%), transparent 28%);
   }
   html {
     @apply font-sans;
+  }
+}
+
+@layer utilities {
+  .campus-grid {
+    background-image:
+      linear-gradient(rgb(128 113 94 / 7%) 1px, transparent 1px),
+      linear-gradient(90deg, rgb(128 113 94 / 7%) 1px, transparent 1px);
+    background-size: 32px 32px;
   }
 }
 

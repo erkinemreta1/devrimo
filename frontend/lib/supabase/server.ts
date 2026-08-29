@@ -26,18 +26,14 @@ export async function createClient() {
 export async function getAuth() {
   const supabase = await createClient();
   const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) return null;
-
-  const {
     data: { session },
   } = await supabase.auth.getSession();
 
+  if (!session?.user) return null;
+
   return {
     supabase,
-    user,
-    accessToken: session?.access_token ?? "",
+    user: session.user,
+    accessToken: session.access_token,
   };
 }

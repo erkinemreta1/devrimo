@@ -1,18 +1,20 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { Loader2Icon } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { useLocale } from "@/components/locale-provider";
 
 export function LoginForm() {
-  const router = useRouter();
+  const { pick } = useLocale();
   const searchParams = useSearchParams();
-  const next = searchParams.get("next") || "/";
+  const requestedNext = searchParams.get("next") || "/";
+  const next = requestedNext.startsWith("/") && !requestedNext.startsWith("//") ? requestedNext : "/";
   const [mode, setMode] = useState<"login" | "signup">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -21,6 +23,21 @@ export function LoginForm() {
   );
   const [info, setInfo] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+
+  function authErrorMessage(caught: unknown) {
+    const message = caught instanceof Error ? caught.message : "Authentication failed";
+    const normalized = message.toLowerCase();
+    if (normalized.includes("email not confirmed")) {
+      return "E-posta adresin henüz onaylanmamış. Gelen kutundaki Supabase onay bağlantısını açıp tekrar dene.";
+    }
+    if (normalized.includes("invalid login credentials")) {
+      return "E-posta veya şifre hatalı. Kayıt olduysan e-posta onayını da kontrol et.";
+    }
+    if (normalized.includes("failed to fetch") || normalized.includes("network")) {
+      return "Supabase'e bağlanılamadı. İnternet bağlantısını ve proje durumunu kontrol et.";
+    }
+    return message;
+  }
 
   async function onSubmit(event: React.FormEvent) {
     event.preventDefault();
@@ -32,18 +49,19 @@ export function LoginForm() {
 
     try {
       if (mode === "login") {
-        const { error: signInError } = await supabase.auth.signInWithPassword({
+        const { data, error: signInError } = await supabase.auth.signInWithPassword({
           email,
           password,
         });
         if (signInError) throw signInError;
-        router.replace(next);
-        router.refresh();
+        if (!data.session) throw new Error("Giriş tamamlandı ancak oturum oluşturulamadı.");
+        setInfo("Giriş başarılı, asistanın açılıyor…");
+        window.location.replace(next);
         return;
       }
 
       const origin = window.location.origin;
-      const { error: signUpError } = await supabase.auth.signUp({
+      const { data, error: signUpError } = await supabase.auth.signUp({
         email,
         password,
         options: {
@@ -51,58 +69,64 @@ export function LoginForm() {
         },
       });
       if (signUpError) throw signUpError;
-      setInfo("Check your email to confirm your account, or sign in if confirmation is disabled.");
+      if (data.session) {
+        window.location.assign(next);
+        return;
+      }
+      setInfo("Hesabını etkinleştirmek için e-posta adresine gönderdiğimiz bağlantıyı aç.");
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Authentication failed");
+      setError(authErrorMessage(caught));
     } finally {
       setPending(false);
     }
   }
 
   return (
-    <Card className="w-full max-w-md border-border/80 shadow-sm">
+    <Card className="min-w-0 w-full max-w-md border-0 bg-transparent py-0 shadow-none">
       <CardHeader>
-        <CardTitle>{mode === "login" ? "Welcome back" : "Create your account"}</CardTitle>
+        <CardTitle className="text-2xl tracking-[-0.04em] sm:text-3xl">{mode === "login" ? pick({ tr: "Tekrar hoş geldin", en: "Welcome back" }) : pick({ tr: "Aramıza katıl", en: "Join Devrimo" })}</CardTitle>
         <CardDescription>
           {mode === "login"
-            ? "Sign in to open your Devrimo agent."
-            : "Sign up with email to provision your personal Hermes agent."}
+            ? pick({ tr: "Kaldığın yerden devam etmek için hesabına giriş yap.", en: "Sign in to continue with your personal METU assistant." })
+            : pick({ tr: "Kişisel kampüs asistanını kullanmaya başla.", en: "Create your personal campus assistant." })}
         </CardDescription>
       </CardHeader>
       <CardContent>
         <form className="flex flex-col gap-4" onSubmit={onSubmit}>
           <div className="flex flex-col gap-2">
-            <Label htmlFor="email">Email</Label>
+            <Label htmlFor="email">{pick({ tr: "E-posta", en: "Email" })}</Label>
             <Input
               id="email"
               type="email"
               autoComplete="email"
               required
+              placeholder="isim@metu.edu.tr"
               value={email}
               onChange={(event) => setEmail(event.target.value)}
             />
           </div>
           <div className="flex flex-col gap-2">
-            <Label htmlFor="password">Password</Label>
+            <Label htmlFor="password">{pick({ tr: "Şifre", en: "Password" })}</Label>
             <Input
               id="password"
               type="password"
               autoComplete={mode === "login" ? "current-password" : "new-password"}
               required
               minLength={6}
+              placeholder={pick({ tr: "En az 6 karakter", en: "At least 6 characters" })}
               value={password}
               onChange={(event) => setPassword(event.target.value)}
             />
           </div>
-          {error ? <p className="text-sm text-destructive">{error}</p> : null}
-          {info ? <p className="text-sm text-muted-foreground">{info}</p> : null}
+          {error ? <p className="break-words text-sm text-destructive">{error}</p> : null}
+          {info ? <p className="break-words rounded-xl bg-accent px-3 py-2.5 text-sm leading-5 text-accent-foreground">{info}</p> : null}
           <Button type="submit" disabled={pending} className="w-full">
             {pending ? <Loader2Icon className="animate-spin" /> : null}
-            {mode === "login" ? "Sign in" : "Sign up"}
+            {mode === "login" ? pick({ tr: "Giriş yap", en: "Sign in" }) : pick({ tr: "Hesap oluştur", en: "Create account" })}
           </Button>
         </form>
         <p className="mt-4 text-center text-sm text-muted-foreground">
-          {mode === "login" ? "Need an account?" : "Already have an account?"}{" "}
+          {mode === "login" ? pick({ tr: "Henüz hesabın yok mu?", en: "New to Devrimo?" }) : pick({ tr: "Zaten hesabın var mı?", en: "Already have an account?" })}{" "}
           <button
             type="button"
             className="font-medium text-foreground underline-offset-4 hover:underline"
@@ -112,7 +136,7 @@ export function LoginForm() {
               setInfo(null);
             }}
           >
-            {mode === "login" ? "Sign up" : "Sign in"}
+            {mode === "login" ? pick({ tr: "Kayıt ol", en: "Create account" }) : pick({ tr: "Giriş yap", en: "Sign in" })}
           </button>
         </p>
       </CardContent>

@@ -13,6 +13,7 @@ export type Agent = {
   hermes_image_tag?: string | null;
   created_at?: string;
   updated_at?: string;
+  error_detail?: string | null;
 };
 
 export type ChatRole = "system" | "user" | "assistant";
@@ -29,11 +30,12 @@ export type ChatSession = {
   title?: string | null;
   created_at?: string;
   updated_at?: string;
+  message_count?: number;
 };
 
 export type ChatCompletionsRequest = {
   messages: ChatMessage[];
-  session_id?: string;
+  client_id?: string;
   stream?: boolean;
   model?: string;
 };

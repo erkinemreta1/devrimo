@@ -1,10 +1,10 @@
 "use client";
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { ThemeProvider } from "next-themes";
 import { useState, type ReactNode } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
+import { LocaleProvider } from "@/components/locale-provider";
 
 export function Providers({ children }: { children: ReactNode }) {
   const [queryClient] = useState(
@@ -20,13 +20,13 @@ export function Providers({ children }: { children: ReactNode }) {
   );
 
   return (
-    <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
+    <LocaleProvider>
       <QueryClientProvider client={queryClient}>
         <TooltipProvider>
           {children}
           <Toaster />
         </TooltipProvider>
       </QueryClientProvider>
-    </ThemeProvider>
+    </LocaleProvider>
   );
 }

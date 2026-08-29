@@ -3,22 +3,23 @@
 import { useAgent } from "@/hooks/useAgent";
 import { Badge } from "@/components/ui/badge";
 import type { AgentStatus } from "@/lib/types";
-
-const statusLabel: Record<AgentStatus, string> = {
-  provisioning: "Provisioning",
-  running: "Running",
-  stopped: "Stopped",
-  error: "Error",
-  destroying: "Destroying",
-};
+import { useLocale } from "@/components/locale-provider";
 
 export function AgentStatusChip() {
+  const { locale } = useLocale();
   const { agent } = useAgent();
   if (!agent) return null;
+  const statusLabel: Record<AgentStatus, Record<"tr" | "en", string>> = {
+    provisioning: { tr: "Hazırlanıyor", en: "Preparing" },
+    running: { tr: "Hazır", en: "Ready" },
+    stopped: { tr: "Durduruldu", en: "Stopped" },
+    error: { tr: "Hata", en: "Error" },
+    destroying: { tr: "Siliniyor", en: "Removing" },
+  };
 
   return (
     <Badge variant={agent.status === "running" ? "default" : "secondary"}>
-      {statusLabel[agent.status]}
+      {statusLabel[agent.status][locale]}
     </Badge>
   );
 }

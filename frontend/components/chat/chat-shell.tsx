@@ -33,7 +33,6 @@ function AssistantThread({
         prepareSendMessagesRequest: ({ id, messages }) => ({
           body: {
             id,
-            session_id: id,
             messages,
           },
         }),
@@ -47,7 +46,12 @@ function AssistantThread({
     transport,
     onThreadIdChange: onThreadReady,
     onError: (error) => {
-      toast.error(error instanceof Error ? error.message : "Chat failed");
+      const message = error instanceof Error ? error.message : "Chat failed";
+      toast.error(
+        message.includes("409") || message.toLowerCase().includes("busy")
+          ? "Your agent is answering another message. Please wait."
+          : message,
+      );
     },
   });
 

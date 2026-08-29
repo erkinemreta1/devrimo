@@ -21,7 +21,7 @@ function toChatMessages(messages: UIMessage[]): ChatMessage[] {
     .filter((message) => message.content.trim().length > 0);
 }
 
-export const maxDuration = 60;
+export const maxDuration = 600;
 
 export async function POST(request: Request) {
   const result = await requireAuth();
@@ -30,11 +30,10 @@ export async function POST(request: Request) {
   const body = (await request.json()) as {
     messages?: UIMessage[];
     id?: string;
-    session_id?: string;
   };
 
   const messages = toChatMessages(body.messages ?? []);
-  const sessionId = body.session_id ?? body.id;
+  const clientId = body.id;
   const textId = "assistant-text";
 
   const stream = createUIMessageStream({
@@ -43,7 +42,7 @@ export async function POST(request: Request) {
       try {
         for await (const delta of streamChatCompletions(result.auth.accessToken, {
           messages,
-          session_id: sessionId,
+          client_id: clientId,
           stream: true,
         })) {
           writer.write({ type: "text-delta", id: textId, delta });
