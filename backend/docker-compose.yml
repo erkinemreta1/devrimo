@@ -1,0 +1,60 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: devrimo
+      POSTGRES_PASSWORD: devrimo
+      POSTGRES_DB: devrimo
+    volumes:
+      - devrimo-postgres:/var/lib/postgresql/data
+    networks:
+      - devrimo-internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U devrimo"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  broker:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://devrimo:devrimo@postgres:5432/devrimo
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - devrimo-internal
+      - devrimo-agents
+    volumes:
+      # Lets the broker create/start/stop/destroy per-user agent containers
+      # via the Docker SDK (app/agents/docker_runtime.py). This grants the
+      # broker container host-root-equivalent access — acceptable for a
+      # single-host dev/staging setup, but for a real production deployment
+      # put a scoped proxy (e.g. Tecnativa/docker-socket-proxy, allowing only
+      # the container/volume/network endpoints this app actually calls) in
+      # front of the socket instead of mounting it directly.
+      - /var/run/docker.sock:/var/run/docker.sock
+
+networks:
+  devrimo-internal:
+    # Postgres <-> broker only. Agent containers are never attached here.
+    driver: bridge
+  devrimo-agents:
+    # Broker <-> per-user Hermes containers. No inbound from the host and no
+    # route to devrimo-internal (agent containers can't reach Postgres).
+    # Outbound to the internet is currently open, since agents need it to
+    # reach the model provider — see AGENT_OPENAI_BASE_URL. Before this goes
+    # anywhere near production traffic, put an egress proxy with an
+    # allowlist (model endpoint + campus MCP servers only) in front of this
+    # network and flip it to `internal: true`; see the plan's
+    # "Isolation & trust" section for why.
+    driver: bridge
+
+volumes:
+  devrimo-postgres:
