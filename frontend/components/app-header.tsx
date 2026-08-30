@@ -8,6 +8,7 @@ import { BrandMark } from "@/components/brand-mark";
 import { LocaleSwitcher } from "@/components/locale-switcher";
 import { useLocale } from "@/components/locale-provider";
 import { ThemeSwitcher } from "@/components/theme-switcher";
+import { HomeIcon } from "lucide-react";
 
 export function AppHeader({ email }: { email?: string | null }) {
   const { pick } = useLocale();
@@ -23,6 +24,10 @@ export function AppHeader({ email }: { email?: string | null }) {
         <ThemeSwitcher />
         <LocaleSwitcher />
         {email ? <span className="hidden text-sm text-muted-foreground sm:inline">{email}</span> : null}
+        <Link href="/" className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}>
+          <HomeIcon aria-hidden="true" />
+          <span className="sr-only sm:not-sr-only">{pick({ tr: "Ana sayfa", en: "Home" })}</span>
+        </Link>
         <Link href="/settings" className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}>
           {pick({ tr: "Ayarlar", en: "Settings" })}
         </Link>
