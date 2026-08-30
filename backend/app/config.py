@@ -21,11 +21,9 @@ class Settings(BaseSettings):
     # without a model provider or the four campus servers installed.
     agent_runtime: str = "agno"  # "agno" | "fake"
 
-    agent_model: str = "anthropic/claude-sonnet-4.5"
-    agent_openai_base_url: str = "https://openrouter.ai/api/v1"
+    agent_model: str = "muse-spark-1.2-contributor"
+    agent_openai_base_url: str = "https://opencode.ai/zen/go/v1"
     agent_openai_api_key: str = ""
-    # OpenRouter's Agno class defaults this to 1024, which truncates a long
-    # transcript summary mid-sentence. Set it explicitly.
     agent_max_tokens: int = 4096
 
     # How many prior runs of a session are replayed into the model's context.

@@ -28,7 +28,6 @@ from uuid import UUID
 
 from agno.agent import Agent
 from agno.models.base import Model
-from agno.models.openrouter import OpenRouter
 from agno.tools.mcp import MCPTools
 
 from app.agents.store import get_agno_db
@@ -52,7 +51,32 @@ def build_model() -> Model:
         from app.agents.echo_model import EchoModel
 
         return EchoModel()
-    return OpenRouter(
+
+    base_url = (settings.agent_openai_base_url or "").lower()
+    # OpenCode Go / OpenAI Responses API endpoints (e.g. muse-spark-1.2-contributor)
+    if "opencode.ai" in base_url or settings.agent_model == "muse-spark-1.2-contributor":
+        from agno.models.openai import OpenAIResponses
+
+        return OpenAIResponses(
+            id=settings.agent_model,
+            api_key=settings.agent_openai_api_key,
+            base_url=settings.agent_openai_base_url,
+            max_output_tokens=settings.agent_max_tokens,
+        )
+
+    if "openrouter.ai" in base_url:
+        from agno.models.openrouter import OpenRouter
+
+        return OpenRouter(
+            id=settings.agent_model,
+            api_key=settings.agent_openai_api_key,
+            base_url=settings.agent_openai_base_url,
+            max_tokens=settings.agent_max_tokens,
+        )
+
+    from agno.models.openai import OpenAIChat
+
+    return OpenAIChat(
         id=settings.agent_model,
         api_key=settings.agent_openai_api_key,
         base_url=settings.agent_openai_base_url,
