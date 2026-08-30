@@ -25,9 +25,17 @@ app/
     manager.py            State machine, turn locks, provisioning
     reconciler.py         Idle reaping, crash healing, background loop
   hermes/client.py       Typed client for one user's Hermes container
-  api/v1/                 Routes: agents, chat, sessions, health
+  campus/
+    catalog.py           The four METU MCP servers, and what each one needs
+    mcp_config.py        Renders one student's mcp_servers block (pure function)
+    credentials.py       The only module that decrypts a METU password
+    verify.py            One SSO sign-in, to check credentials before storing
+    service.py           Profile + credential persistence
+  api/v1/                 Routes: agents, campus, chat, profile, sessions, health
   schemas.py              Response shapes, kept in lockstep with the frontend
-images/hermes/           The devrimo/hermes image (SOUL.md, MCP template)
+images/hermes/           The devrimo/hermes image (SOUL.md, vendored MCPs)
+  bin/apply-campus-mcp.py  Merges the broker's servers into Hermes' config.yaml
+  CAMPUS-MCP.md            How the four servers are wired, and how to smoke-test
 alembic/                  Schema migrations
 tests/                    Full API test suite against the fake runtime
 ```
@@ -79,8 +87,15 @@ calls.
 
 This was built against Hermes's published docs, not a running instance —
 there was no way to pull `nousresearch/hermes-agent` and test against it in
-this environment. Two things are worth confirming against a real container
-before relying on them:
+this environment. Worth confirming against a real container before relying on:
+
+- **A full chat turn that actually calls a campus tool.** The servers are
+  confirmed to launch and advertise their tools (`hermes mcp add` probed
+  `sais` and discovered all six), and the config schema is confirmed against
+  the real image — but no end-to-end turn has driven a tool call through the
+  model and back.
+- **`images/hermes/CAMPUS-MCP.md` documents the smoke test** for re-checking a
+  server after bumping its pinned ref.
 
 - **Session adoption.** `chat.py` sends the client's thread id straight
   through as `X-Hermes-Session-Id`, assuming Hermes adopts an id it hasn't
@@ -95,11 +110,65 @@ before relying on them:
 
 ## Campus MCP tools
 
-`images/hermes/mcp/campus.mcp.json.example` mirrors the five tools listed in
-`frontend/lib/campus.ts` (ODTÜClass, catalog, calendar, library, campus),
-but none of those have a real MCP server behind them yet — that's a
-separate build. Ship the image without this file until they exist; Hermes
-runs fine on its built-in tools alone.
+Four real MCP servers give the agent access to METU systems:
+
+| id | Server | What it reaches |
+|---|---|---|
+| `sais` | [metu-sais-mcp](https://github.com/atesahmet0/metu-sais-mcp) | Transcript, CGPA, weekly schedule, portal announcements |
+| `course_info` | [metu-course-info-mcp](https://github.com/atesahmet0/metu-course-info-mcp) | Course catalog, sections, prerequisites, curriculum categories |
+| `odtuclass` | [metu-odtuclass-mcp](https://github.com/erkinemreta1/metu-odtuclass-mcp) | Enrolled courses, announcements, syllabi, assignment deadlines |
+| `webmail` | [metu-webmail-mcp](https://github.com/atesahmet0/metu-webmail-mcp) | Read/search/send mail on the student's `@metu.edu.tr` account |
+
+### How they run
+
+All four are baked into the `devrimo/hermes` image at build time, each in its
+own virtualenv under `/opt/mcp` (their upstream pins don't co-resolve — one
+needs `fastmcp`, the others pin `mcp` directly). They are launched **inside
+each student's own container** over stdio, not as shared HTTP services.
+
+That choice is the whole security design. Three of the four upstream servers
+are single-tenant and read credentials from process environment, and the
+per-user container is already this system's isolation boundary — so one
+student's METU password is only ever in one student's container. A shared
+multi-tenant deployment would put every student's credentials in one process.
+
+Hermes reads MCP servers from `$HERMES_HOME/config.yaml` under `mcp_servers`
+(`/opt/data/config.yaml` in this image) — confirmed by running `hermes mcp add`
+against the real image and reading back what it wrote.
+`app/campus/mcp_config.py` renders that mapping, `docker_runtime.py` uploads it
+as a tar stream (not an `exec` command line, which is visible to anything that
+can inspect the daemon) at mode 0600, and `images/hermes/bin/apply-campus-mcp.py`
+merges it in with `ruamel.yaml` — preserving Hermes' comments, unrelated keys,
+and any server the student added with `hermes mcp add` — then deletes the
+staged file. See `images/hermes/CAMPUS-MCP.md`.
+
+### Credentials
+
+There is no delegated-token flow at `student.metu.edu.tr`, so these servers
+authenticate as the student with their real METU password. Consequently:
+
+- The password is collected once, through frontend onboarding, over TLS.
+- It is verified against METU SSO before being stored (`app/campus/verify.py`),
+  so a typo fails on the form rather than silently breaking four tools.
+- It is stored Fernet-encrypted under `SECRET_ENCRYPTION_KEY`, decrypted only
+  in `app/campus/credentials.py`, and is in **no** response schema — the API
+  reports `has_password: true`, never the value.
+- Disconnecting from Settings deletes it and rebuilds the container without it.
+
+`webmail` is the only server that can act rather than read, so it is opt-in
+(`default_enabled=False`) and flagged as such in the onboarding UI.
+
+### Changing a connection
+
+Credentials live in the config file's per-server `env`, not in container
+environment, so applying a change rewrites that file and restarts the gateway
+(`AgentRuntime.reconfigure`) — the container and its volume survive.
+
+`PUT /campus/connection` does this eagerly when the agent is running. When it
+isn't — or when the eager push fails — `campus_credentials.config_dirty` stays
+set, and the config is pushed on the next `manager.start`, or on demand via
+`POST /campus/apply`. Without that, an agent stopped by the idle reaper would
+come back running the toolset it was originally created with.
 
 ## Security notes
 
@@ -107,7 +176,14 @@ runs fine on its built-in tools alone.
   limits, and no published ports — see `docker_runtime.py`.
 - Per-user `API_SERVER_KEY`s are generated at provision time and stored
   encrypted (Fernet, keyed by `SECRET_ENCRYPTION_KEY`) — never returned to
-  the frontend.
+  the frontend. Students' METU passwords use the same key and the same rule.
+- `SECRET_ENCRYPTION_KEY` now protects real user passwords, not just internal
+  API keys. It should be a managed secret, and rotating it needs a
+  re-encryption pass — otherwise every campus connection breaks at once.
+- The broker holds plaintext METU passwords in memory only while rendering a
+  container's MCP config. They are not logged (see `verify.py`, which never
+  logs its request payload) and `CampusSecrets.__repr__` is overridden so an
+  accidental interpolation can't print one.
 - The `devrimo-agents` Docker network currently allows outbound internet
   (agents need it to reach the model provider) but has no route to
   Postgres or the broker's internal endpoints. Tightening outbound to an

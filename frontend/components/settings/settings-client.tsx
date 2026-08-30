@@ -18,10 +18,13 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { useLocale } from "@/components/locale-provider";
+import { CampusConnectionCard } from "@/components/settings/campus-connection-card";
+import { useProfile } from "@/hooks/useProfile";
 
 export function SettingsClient() {
   const { pick } = useLocale();
   const { agent, isLoading, ensureRunning, stop, destroy, refetch } = useAgent();
+  const { update: updateProfile } = useProfile();
 
   async function run(action: () => Promise<unknown>, success: string) {
     try {
@@ -39,6 +42,8 @@ export function SettingsClient() {
         <h1 className="text-2xl font-semibold tracking-tight">{pick({ tr: "Ayarlar", en: "Settings" })}</h1>
         <p className="text-sm text-muted-foreground">{pick({ tr: "Kişisel asistanının çalışma alanını yönet.", en: "Manage your assistant's private workspace." })}</p>
       </div>
+
+      <CampusConnectionCard />
 
       <Card>
         <CardHeader>
@@ -106,6 +111,33 @@ export function SettingsClient() {
               </Button>
             </div>
           )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>{pick({ tr: "Kurulum", en: "Setup" })}</CardTitle>
+          <CardDescription>
+            {pick({
+              tr: "Tanıtım adımlarını baştan görmek istersen tekrar başlatabilirsin. Kayıtlı ayarların silinmez.",
+              en: "Walk through the setup steps again if you want to revisit them. Nothing you've already saved is cleared.",
+            })}
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Button
+            variant="outline"
+            disabled={updateProfile.isPending}
+            onClick={() =>
+              run(
+                () => updateProfile.mutateAsync({ onboarding_completed: false, onboarding_step: "welcome" }),
+                pick({ tr: "Kurulum tekrar açıldı.", en: "Setup reopened." }),
+              )
+            }
+          >
+            {updateProfile.isPending ? <Loader2Icon className="animate-spin" /> : null}
+            {pick({ tr: "Kurulumu tekrar çalıştır", en: "Run setup again" })}
+          </Button>
         </CardContent>
       </Card>
     </div>

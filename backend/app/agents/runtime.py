@@ -21,6 +21,13 @@ class AgentSpec:
     image: str
     api_key: str
     port: int
+    # Rendered campus MCP config (app/campus/mcp_config.py), written into the
+    # container's writable volume at create time. ``None`` means "leave
+    # whatever is already on the volume alone"; an empty-server config means
+    # "this student has no campus tools", which is a real state worth writing.
+    mcp_config: str | None = None
+    # Directories the MCP servers need on the volume before they are launched.
+    mcp_working_dirs: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -47,6 +54,16 @@ class AgentRuntime(Protocol):
 
     async def destroy(self, spec: AgentSpec) -> None:
         """Stop and remove the container and its volume. Irreversible."""
+        ...
+
+    async def reconfigure(self, spec: AgentSpec) -> None:
+        """Push a new campus MCP config into an existing container.
+
+        The credentials live in the config file's per-server ``env``, not in
+        container environment, so a changed campus connection needs the file
+        rewritten and the gateway restarted — not the container replaced. The
+        volume, and everything on it, is untouched.
+        """
         ...
 
     async def state(self, spec: AgentSpec) -> RuntimeState:

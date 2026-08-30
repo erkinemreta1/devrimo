@@ -11,7 +11,7 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 
-from app.agents.manager import get_runtime, spec_for, wait_for_health
+from app.agents.manager import get_runtime, spec_for, spec_with_campus, wait_for_health
 from app.config import get_settings
 from app.db.models import Agent, AgentStatus
 from app.db.session import SessionLocal
@@ -59,6 +59,10 @@ async def _heal_crashed(now: datetime) -> None:
 
             logger.warning("agent_crashed_restarting", user_id=str(agent.user_id))
             try:
+                # A crash can also mean the container is gone entirely, in
+                # which case ``start`` recreates it — with the campus config,
+                # or the student silently loses their tools on a heal.
+                spec = await spec_with_campus(db, agent)
                 await runtime.start(spec)
                 healthy = await wait_for_health(spec, settings.agent_start_timeout_seconds)
                 if not healthy:

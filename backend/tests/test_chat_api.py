@@ -10,8 +10,9 @@ class _StubHermesClient:
 
     calls: list[tuple[str, str]] = []
 
-    def __init__(self, base_url: str, api_key: str):
+    def __init__(self, base_url: str, api_key: str, model: str = "hermes"):
         self.base_url = base_url
+        self.model = model
         self.api_key = api_key
 
     async def stream_chat_completions(self, messages, hermes_session_id):

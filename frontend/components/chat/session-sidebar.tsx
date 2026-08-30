@@ -6,6 +6,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import type { ChatSession } from "@/lib/types";
 import { useLocale } from "@/components/locale-provider";
+import { McpToolsList } from "@/components/chat/mcp-tools-list";
 
 export function SessionSidebar({
   sessions,
@@ -63,6 +64,9 @@ export function SessionSidebar({
           )}
         </div>
       </ScrollArea>
+      <div className="border-t pt-3">
+        <McpToolsList compact />
+      </div>
     </aside>
   );
 }

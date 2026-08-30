@@ -1,4 +1,5 @@
 import asyncio
+import dataclasses
 import secrets
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
@@ -11,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agents.docker_runtime import DockerAgentRuntime
 from app.agents.fake_runtime import FakeAgentRuntime
 from app.agents.runtime import AgentRuntime, AgentSpec
+from app.campus import service as campus_service
 from app.config import get_settings
 from app.core.crypto import decrypt_secret, encrypt_secret
 from app.db.models import Agent, AgentStatus
@@ -31,6 +33,13 @@ def get_runtime() -> AgentRuntime:
 
 
 def spec_for(agent: Agent) -> AgentSpec:
+    """Address an existing container. Carries no campus config.
+
+    Enough for stop/destroy/state/health, which only need to name the
+    container. Anything that *creates* a container must go through
+    :func:`spec_with_campus` instead, so the container is built with the
+    student's current MCP config rather than none at all.
+    """
     settings = get_settings()
     return AgentSpec(
         user_id=agent.user_id,
@@ -40,6 +49,12 @@ def spec_for(agent: Agent) -> AgentSpec:
         api_key=decrypt_secret(agent.api_key_enc),
         port=settings.agent_api_server_port,
     )
+
+
+async def spec_with_campus(db: AsyncSession, agent: Agent) -> AgentSpec:
+    """The spec used on every path that can create or replace a container."""
+    mcp_config, working_dirs = await campus_service.campus_runtime_config(db, agent.user_id)
+    return dataclasses.replace(spec_for(agent), mcp_config=mcp_config, mcp_working_dirs=working_dirs)
 
 
 def endpoint_for(agent: Agent) -> str:
@@ -96,13 +111,15 @@ async def _finish_provisioning(agent_id: UUID) -> None:
         if agent is None:
             return
 
-        spec = spec_for(agent)
         try:
+            spec = await spec_with_campus(db, agent)
             await get_runtime().create(spec)
             healthy = await wait_for_health(spec, settings.agent_start_timeout_seconds)
             agent.status = AgentStatus.running if healthy else AgentStatus.error
             agent.error_detail = None if healthy else "Agent did not become healthy in time"
             agent.last_active_at = datetime.now(UTC)
+            if healthy:
+                await campus_service.mark_config_applied(db, agent.user_id)
         except Exception as exc:  # runtime failures land the agent in `error`, never crash the loop
             logger.error("provision_failed", user_id=str(agent.user_id), error=str(exc))
             agent.status = AgentStatus.error
@@ -138,9 +155,11 @@ async def ensure_running(db: AsyncSession, agent: Agent) -> Agent:
 
 async def start(db: AsyncSession, agent: Agent) -> Agent:
     settings = get_settings()
-    spec = spec_for(agent)
     runtime = get_runtime()
     try:
+        # ``start`` falls through to ``create`` when the container is gone, so
+        # it needs the campus config too.
+        spec = await spec_with_campus(db, agent)
         await runtime.start(spec)
         healthy = await wait_for_health(spec, settings.agent_start_timeout_seconds)
     except Exception as exc:
@@ -159,6 +178,65 @@ async def start(db: AsyncSession, agent: Agent) -> Agent:
     agent.error_detail = None
     agent.last_active_at = datetime.now(UTC)
     await db.commit()
+
+    # A campus change made while this agent was stopped was never pushed into
+    # the container — it's running the config it was last created with. Push it
+    # now, before the student's first turn goes through with the wrong tools.
+    await _push_pending_campus_config(db, agent)
+
+    await db.refresh(agent)
+    return agent
+
+
+async def _push_pending_campus_config(db: AsyncSession, agent: Agent) -> None:
+    """Best-effort: a stale toolset is worth a log line, not a failed start."""
+    credential = await campus_service.get_credential(db, agent.user_id)
+    if credential is None or not credential.config_dirty:
+        return
+    try:
+        spec = await spec_with_campus(db, agent)
+        await get_runtime().reconfigure(spec)
+        if await wait_for_health(spec, get_settings().agent_start_timeout_seconds):
+            await campus_service.mark_config_applied(db, agent.user_id)
+    except Exception as exc:
+        logger.warning("campus_config_push_failed", user_id=str(agent.user_id), error=str(exc))
+
+
+async def apply_campus_config(db: AsyncSession, agent: Agent) -> Agent:
+    """Push a changed campus connection into the agent and restart its gateway.
+
+    The credentials live in the on-volume MCP config file rather than in
+    container environment, so this rewrites that file and restarts — the
+    container, and everything on its volume, survives.
+    """
+    if agent.status == AgentStatus.provisioning:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Agent is still provisioning")
+    if agent.status == AgentStatus.destroying:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Agent is being destroyed")
+
+    settings = get_settings()
+    runtime = get_runtime()
+    try:
+        spec = await spec_with_campus(db, agent)
+        await runtime.reconfigure(spec)
+        healthy = await wait_for_health(spec, settings.agent_start_timeout_seconds)
+    except Exception as exc:
+        agent.status = AgentStatus.error
+        agent.error_detail = str(exc)
+        await db.commit()
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Could not apply campus tools: {exc}") from exc
+
+    if not healthy:
+        agent.status = AgentStatus.error
+        agent.error_detail = "Agent did not become healthy after applying campus tools"
+        await db.commit()
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, agent.error_detail)
+
+    agent.status = AgentStatus.running
+    agent.error_detail = None
+    agent.last_active_at = datetime.now(UTC)
+    await db.commit()
+    await campus_service.mark_config_applied(db, agent.user_id)
     await db.refresh(agent)
     return agent
 

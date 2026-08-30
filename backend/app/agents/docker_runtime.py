@@ -6,6 +6,10 @@ ports, no host mounts, and no Docker socket of its own — see
 """
 
 import asyncio
+import io
+import shlex
+import tarfile
+import time
 
 import docker
 import httpx
@@ -13,6 +17,7 @@ from docker.errors import APIError, NotFound
 from docker.models.containers import Container
 
 from app.agents.runtime import AgentSpec, RuntimeState
+from app.campus.mcp_config import MERGE_SCRIPT_PATH, STAGED_CONFIG_PATH, managed_server_names
 from app.config import get_settings
 from app.logging import get_logger
 
@@ -23,12 +28,10 @@ logger = get_logger(__name__)
 _SEED_SCRIPT = (
     "test -f /opt/data/SOUL.md || cp /opt/devrimo/seed/SOUL.md /opt/data/SOUL.md; "
     "mkdir -p /opt/data/mcp; "
-    "test -f /opt/data/mcp/campus.mcp.json.example || "
-    "cp /opt/devrimo/seed/campus.mcp.json.example /opt/data/mcp/campus.mcp.json.example; "
-    "if [ -f /opt/data/config.yaml ] && [ -n \"$OPENAI_MODEL\" ] && "
-    "[ \"$OPENAI_BASE_URL\" = \"https://openrouter.ai/api/v1\" ]; then "
-    "sed -i \"s|^  default:.*|  default: \\\"$OPENAI_MODEL\\\"|; "
-    "s|^  provider:.*|  provider: \\\"openrouter\\\"|\" /opt/data/config.yaml; "
+    'if [ -f /opt/data/config.yaml ] && [ -n "$OPENAI_MODEL" ] && '
+    '[ "$OPENAI_BASE_URL" = "https://openrouter.ai/api/v1" ]; then '
+    'sed -i "s|^  default:.*|  default: \\"$OPENAI_MODEL\\"|; '
+    's|^  provider:.*|  provider: \\"openrouter\\"|" /opt/data/config.yaml; '
     "fi; "
     "true"
 )
@@ -74,6 +77,12 @@ class DockerAgentRuntime:
         if existing is not None:
             if existing.status != "running":
                 existing.start()
+                existing.reload()
+            # Re-install rather than short-circuit: this branch is also the
+            # retry path after a create whose config install failed, and a
+            # container running a stale campus config is worse than a slow
+            # start.
+            self._install_mcp_config_sync(existing, spec)
             return existing.id
 
         environment = {
@@ -111,8 +120,10 @@ class DockerAgentRuntime:
             command="gateway run",
         )
         self._seed_data_sync(container)
-        # The seed script can update Hermes' persisted model configuration;
-        # restart once so the gateway reloads that configuration.
+        self._install_mcp_config_sync(container, spec)
+        # The seed script can update Hermes' persisted model configuration, and
+        # the campus MCP config is read at gateway start; restart once so the
+        # gateway picks up both.
         container.restart()
         return container.id
 
@@ -134,8 +145,92 @@ class DockerAgentRuntime:
         except APIError as exc:
             logger.warning("seed_data_failed", container=container.name, error=str(exc))
 
+    def _install_mcp_config_sync(self, container: Container, spec: AgentSpec) -> None:
+        """Install the student's campus MCP servers into Hermes' config.yaml.
+
+        Hermes reads MCP servers from ``$HERMES_HOME/config.yaml`` under
+        ``mcp_servers`` (verified against the real image), so the broker stages
+        its rendered mapping as JSON and execs the merge script baked into the
+        image, which folds it in with ruamel — preserving Hermes' own comments,
+        unrelated keys, and any servers the student added by hand.
+
+        The staged file is uploaded as a tar stream rather than echoed through
+        an ``exec`` command line: it embeds the student's METU password, and an
+        exec argv is visible to anything that can inspect the daemon. The tar
+        header carries mode 0600 so the file is never briefly world-readable,
+        and the merge script deletes it once applied.
+        """
+        if spec.mcp_config is None:
+            return
+
+        staged_dir, staged_name = STAGED_CONFIG_PATH.rsplit("/", 1)
+        directories = [staged_dir, *spec.mcp_working_dirs]
+        mkdir = "mkdir -p " + " ".join(shlex.quote(d) for d in directories)
+        exit_code, output = container.exec_run(["sh", "-c", mkdir])
+        if exit_code != 0:
+            logger.warning(
+                "mcp_config_mkdir_failed",
+                container=container.name,
+                exit_code=exit_code,
+                output=output.decode("utf-8", "replace"),
+            )
+            return
+
+        payload = spec.mcp_config.encode("utf-8")
+        archive = io.BytesIO()
+        with tarfile.open(fileobj=archive, mode="w") as tar:
+            info = tarfile.TarInfo(name=staged_name)
+            info.size = len(payload)
+            info.mode = 0o600
+            info.mtime = int(time.time())
+            tar.addfile(info, io.BytesIO(payload))
+        archive.seek(0)
+
+        container.put_archive(staged_dir, archive.getvalue())
+
+        # The base image runs Hermes as an unprivileged user; files we drop in
+        # as root would otherwise be unreadable to it. Matching /opt/data's own
+        # ownership works without this module needing to know that user's uid.
+        container.exec_run(
+            ["sh", "-c", "chown --reference=/opt/data -R /opt/data/.devrimo 2>/dev/null || true"]
+        )
+
+        exit_code, output = container.exec_run(
+            [
+                "/opt/hermes/.venv/bin/python",
+                MERGE_SCRIPT_PATH,
+                "--staged",
+                STAGED_CONFIG_PATH,
+                "--managed",
+                ",".join(managed_server_names()),
+            ]
+        )
+        detail = output.decode("utf-8", "replace").strip()
+        if exit_code != 0:
+            # Leaving a stale toolset in place silently is worse than a loud
+            # failure: the student explicitly connected these tools.
+            raise RuntimeError(f"Could not apply campus MCP config: {detail}")
+        logger.info("mcp_config_applied", container=container.name, detail=detail)
+
     async def create(self, spec: AgentSpec) -> str:
         return await self._run(self._create_sync, spec)
+
+    async def reconfigure(self, spec: AgentSpec) -> None:
+        def _reconfigure() -> None:
+            container = self._get_container(spec)
+            if container is None:
+                # Nothing to reconfigure; create it with the new config instead.
+                self._create_sync(spec)
+                return
+            if container.status != "running":
+                # The install goes through `exec`, which needs a live container.
+                container.start()
+                container.reload()
+            self._install_mcp_config_sync(container, spec)
+            # The gateway reads the MCP config at start.
+            container.restart()
+
+        await self._run(_reconfigure)
 
     async def start(self, spec: AgentSpec) -> None:
         def _start() -> None:

@@ -1,0 +1,129 @@
+"""Database access for user profiles and campus credentials.
+
+Sits between the API routes and the models so that both the routes and the
+agent manager have one place to ask "what campus tools should this student's
+container be built with?" without either of them growing its own queries.
+"""
+
+from datetime import UTC, datetime
+from uuid import UUID
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.campus.catalog import DEFAULT_ENABLED_TOOL_IDS, normalize_tool_ids
+from app.campus.credentials import CampusSecrets, secrets_for
+from app.campus.mcp_config import render_mcp_config, working_directories
+from app.core.crypto import encrypt_secret
+from app.db.models import CampusCredential, UserProfile
+
+
+async def get_profile(db: AsyncSession, user_id: UUID) -> UserProfile | None:
+    result = await db.execute(select(UserProfile).where(UserProfile.user_id == user_id))
+    return result.scalar_one_or_none()
+
+
+async def get_or_create_profile(db: AsyncSession, user_id: UUID) -> UserProfile:
+    profile = await get_profile(db, user_id)
+    if profile is not None:
+        return profile
+
+    profile = UserProfile(user_id=user_id)
+    db.add(profile)
+    try:
+        await db.commit()
+    except Exception:
+        # Two tabs finishing onboarding at once both try to create the row;
+        # the loser just reads what the winner wrote.
+        await db.rollback()
+        existing = await get_profile(db, user_id)
+        if existing is None:
+            raise
+        return existing
+    await db.refresh(profile)
+    return profile
+
+
+async def get_credential(db: AsyncSession, user_id: UUID) -> CampusCredential | None:
+    result = await db.execute(select(CampusCredential).where(CampusCredential.user_id == user_id))
+    return result.scalar_one_or_none()
+
+
+async def upsert_credential(
+    db: AsyncSession,
+    user_id: UUID,
+    *,
+    metu_username: str,
+    metu_password: str | None,
+    odtuclass_token: str | None,
+    odtuclass_base_url: str | None,
+    locale: str,
+    enabled_tools: list[str] | None,
+    verified: bool,
+    verification_error: str | None,
+) -> CampusCredential:
+    """Create or replace this student's campus connection.
+
+    ``metu_password`` and ``odtuclass_token`` of ``None`` mean "leave the
+    stored value alone" — the frontend re-sends the username and tool
+    selection when toggling tools, and should not have to re-prompt for a
+    password to do it. Passing an empty string clears the stored secret.
+    """
+    credential = await get_credential(db, user_id)
+    if credential is None:
+        credential = CampusCredential(user_id=user_id, metu_username=metu_username, enabled_tools=[])
+        db.add(credential)
+
+    credential.metu_username = metu_username
+    if metu_password is not None:
+        credential.metu_password_enc = encrypt_secret(metu_password) if metu_password else None
+    if odtuclass_token is not None:
+        credential.odtuclass_token_enc = encrypt_secret(odtuclass_token) if odtuclass_token else None
+    credential.odtuclass_base_url = odtuclass_base_url or None
+    credential.locale = locale
+    credential.enabled_tools = normalize_tool_ids(
+        enabled_tools if enabled_tools is not None else credential.enabled_tools or list(DEFAULT_ENABLED_TOOL_IDS)
+    )
+    credential.verified_at = datetime.now(UTC) if verified else None
+    credential.verification_error = verification_error
+    # Any change here invalidates the config baked into the running container.
+    credential.config_dirty = True
+
+    await db.commit()
+    await db.refresh(credential)
+    return credential
+
+
+async def delete_credential(db: AsyncSession, user_id: UUID) -> bool:
+    credential = await get_credential(db, user_id)
+    if credential is None:
+        return False
+    await db.delete(credential)
+    await db.commit()
+    return True
+
+
+async def mark_config_applied(db: AsyncSession, user_id: UUID) -> None:
+    credential = await get_credential(db, user_id)
+    if credential is not None and credential.config_dirty:
+        credential.config_dirty = False
+        await db.commit()
+
+
+def enabled_tool_ids(credential: CampusCredential | None) -> list[str]:
+    if credential is None:
+        return []
+    return normalize_tool_ids(credential.enabled_tools or [])
+
+
+async def campus_runtime_config(db: AsyncSession, user_id: UUID) -> tuple[str, tuple[str, ...]]:
+    """The rendered MCP config and required working dirs for this student's container.
+
+    A student with no credentials still gets a config — an empty one — so that
+    disconnecting actually removes the servers from a rebuilt container rather
+    than leaving the previous file in place on the volume.
+    """
+    credential = await get_credential(db, user_id)
+    secrets: CampusSecrets | None = secrets_for(credential)
+    tool_ids = enabled_tool_ids(credential)
+    return render_mcp_config(tool_ids, secrets), tuple(working_directories(tool_ids, secrets))

@@ -12,6 +12,10 @@ from app.agents.runtime import AgentSpec, RuntimeState
 @dataclass
 class _FakeContainer:
     running: bool = True
+    # Recorded so tests can assert what config a container was built with,
+    # the same way they'd inspect a real container's volume.
+    mcp_config: str | None = None
+    mcp_working_dirs: tuple[str, ...] = ()
 
 
 @dataclass
@@ -19,7 +23,11 @@ class FakeAgentRuntime:
     containers: dict[str, _FakeContainer] = field(default_factory=dict)
 
     async def create(self, spec: AgentSpec) -> str:
-        self.containers[spec.container_name] = _FakeContainer(running=True)
+        self.containers[spec.container_name] = _FakeContainer(
+            running=True,
+            mcp_config=spec.mcp_config,
+            mcp_working_dirs=spec.mcp_working_dirs,
+        )
         return f"fake-{spec.container_name}"
 
     async def start(self, spec: AgentSpec) -> None:
@@ -33,6 +41,15 @@ class FakeAgentRuntime:
 
     async def destroy(self, spec: AgentSpec) -> None:
         self.containers.pop(spec.container_name, None)
+
+    async def reconfigure(self, spec: AgentSpec) -> None:
+        container = self.containers.get(spec.container_name)
+        if container is None:
+            await self.create(spec)
+            return
+        container.mcp_config = spec.mcp_config
+        container.mcp_working_dirs = spec.mcp_working_dirs
+        container.running = True
 
     async def state(self, spec: AgentSpec) -> RuntimeState:
         container = self.containers.get(spec.container_name)
