@@ -8,6 +8,7 @@ import { AgentStatusChip } from "@/components/agent/agent-status-chip";
 import { BrandMark } from "@/components/brand-mark";
 import { LocaleSwitcher } from "@/components/locale-switcher";
 import { useLocale } from "@/components/locale-provider";
+import { ThemeSwitcher } from "@/components/theme-switcher";
 
 export function AppHeader({ email }: { email?: string | null }) {
   const { pick } = useLocale();
@@ -21,6 +22,7 @@ export function AppHeader({ email }: { email?: string | null }) {
         <AgentStatusChip />
       </div>
       <div className="flex items-center gap-2">
+        <ThemeSwitcher />
         <LocaleSwitcher />
         {email ? <span className="hidden text-sm text-muted-foreground sm:inline">{email}</span> : null}
         <Link href="/settings" className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}>

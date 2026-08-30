@@ -66,6 +66,7 @@
 }
 
 :root {
+  color-scheme: light;
   /* METU identity: Pantone 186 red, Cool Gray 11, black */
   --background: #f5f1e9;
   --foreground: #181513;
@@ -102,37 +103,38 @@
 }
 
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
+  color-scheme: dark;
+  --background: #12100f;
+  --foreground: #f7f2eb;
+  --card: #1c1917;
+  --card-foreground: #f7f2eb;
+  --popover: #211d1a;
+  --popover-foreground: #fffaf3;
   --primary: #e31837;
   --primary-foreground: #ffffff;
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
+  --secondary: #2b2622;
+  --secondary-foreground: #fffaf3;
+  --muted: #2a2521;
+  --muted-foreground: #bdb3a9;
+  --accent: #3b191f;
+  --accent-foreground: #ffbdc7;
+  --destructive: #ff5d73;
+  --border: #4b423b;
+  --input: #5a4f47;
+  --ring: #ff526b;
   --chart-1: oklch(0.87 0 0);
   --chart-2: oklch(0.556 0 0);
   --chart-3: oklch(0.439 0 0);
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar: #1c1917;
+  --sidebar-foreground: #f7f2eb;
   --sidebar-primary: #e31837;
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #3b191f;
+  --sidebar-accent-foreground: #ffbdc7;
+  --sidebar-border: #4b423b;
+  --sidebar-ring: #ff526b;
 }
 
 @layer base {
@@ -142,6 +144,9 @@
   body {
     @apply bg-background text-foreground;
     background-image: radial-gradient(circle at 15% 10%, rgb(227 24 55 / 5%), transparent 28%);
+  }
+  .dark body {
+    background-image: radial-gradient(circle at 15% 10%, rgb(227 24 55 / 12%), transparent 30%);
   }
   html {
     @apply font-sans;
@@ -154,6 +159,11 @@
       linear-gradient(rgb(128 113 94 / 7%) 1px, transparent 1px),
       linear-gradient(90deg, rgb(128 113 94 / 7%) 1px, transparent 1px);
     background-size: 32px 32px;
+  }
+  .dark .campus-grid {
+    background-image:
+      linear-gradient(rgb(255 255 255 / 6%) 1px, transparent 1px),
+      linear-gradient(90deg, rgb(255 255 255 / 6%) 1px, transparent 1px);
   }
 }
 
