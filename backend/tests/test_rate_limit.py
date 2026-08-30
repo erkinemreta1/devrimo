@@ -22,7 +22,9 @@ async def test_usage_is_accumulated_in_one_hourly_bucket():
     assert rows[0].bucket_start.replace(tzinfo=UTC) == current_hour(datetime.now(UTC))
 
 
-async def test_chat_is_rejected_after_hourly_budget(client):
+async def test_chat_is_rejected_after_hourly_budget(client, monkeypatch):
+    monkeypatch.setenv("USER_TOKEN_LIMIT_PER_HOUR", "30000")
+    get_settings.cache_clear()
     user_id = new_user_id()
     headers = auth_header(user_id)
     await client.post("/api/v1/agents/provision", headers=headers)
@@ -38,6 +40,7 @@ async def test_chat_is_rejected_after_hourly_budget(client):
 
     assert response.status_code == 429
     assert int(response.headers["retry-after"]) > 0
+    get_settings.cache_clear()
 
 
 async def test_oversized_message_is_rejected_before_model_run(client):

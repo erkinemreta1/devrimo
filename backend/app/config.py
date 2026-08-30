@@ -31,15 +31,19 @@ class Settings(BaseSettings):
 
     # How many prior runs of a session are replayed into the model's context.
     agent_history_runs: int = 10
-    scholar_history_runs: int = 3
+    scholar_history_runs: int = 1
     agent_tool_call_limit: int = 4
-    agent_compress_tool_results: bool = True
+    agent_compress_tool_results: bool = False
     agent_compress_tool_results_limit: int = 3
-    agent_learning_enabled: bool = True
+    agent_learning_enabled: bool = False
+    agent_reasoning_effort: str = "minimal"
+    agent_verbosity: str = "low"
     agent_retries: int = 1
     chat_run_timeout_seconds: int = 120
     chat_max_input_characters: int = 12_000
-    user_token_limit_per_hour: int = 30_000
+    # Disabled by default. Context/output controls reduce spend without locking
+    # a student out mid-session; deployments may opt into a positive budget.
+    user_token_limit_per_hour: int = 0
     agent_store_events: bool = False
     agent_tracing_enabled: bool = False
     # A user's agent (and its MCP subprocesses) is torn down after this long

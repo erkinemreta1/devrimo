@@ -21,6 +21,8 @@ def build_model() -> Model:
             api_key=settings.agent_openai_api_key,
             base_url=settings.agent_openai_base_url,
             max_output_tokens=settings.agent_max_tokens,
+            reasoning_effort=settings.agent_reasoning_effort,
+            verbosity=settings.agent_verbosity,
         )
 
     if "openrouter.ai" in base_url:
