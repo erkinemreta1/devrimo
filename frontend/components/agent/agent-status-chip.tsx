@@ -18,7 +18,7 @@ export function AgentStatusChip() {
   };
 
   return (
-    <Badge variant={agent.status === "running" ? "default" : "secondary"}>
+    <Badge role="status" aria-live="polite" variant={agent.status === "running" ? "default" : "secondary"}>
       {statusLabel[agent.status][locale]}
     </Badge>
   );

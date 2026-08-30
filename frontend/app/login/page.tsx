@@ -13,7 +13,7 @@ export default function LoginPage() {
   const { pick } = useLocale();
 
   return (
-    <main className="campus-grid relative min-h-svh overflow-x-hidden px-3 py-3 sm:px-8 sm:py-8">
+    <main id="main-content" tabIndex={-1} className="campus-grid relative min-h-svh overflow-x-hidden px-3 py-3 outline-none sm:px-8 sm:py-8">
       <div className="pointer-events-none absolute -right-28 -top-28 size-96 rounded-full bg-primary/10 blur-3xl" />
       <div className="absolute right-5 top-5 z-20 flex items-center gap-2 sm:right-12 sm:top-12">
         <ThemeSwitcher />

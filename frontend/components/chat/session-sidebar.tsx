@@ -23,7 +23,7 @@ export function SessionSidebar({
 }) {
   const { pick } = useLocale();
   return (
-    <aside className="flex h-full w-64 shrink-0 flex-col border-r bg-sidebar/80">
+    <aside aria-label={pick({ tr: "Sohbet geçmişi", en: "Chat history" })} className="flex h-full w-64 shrink-0 flex-col border-r bg-sidebar/80">
       <div className="p-3">
         <Button className="w-full justify-start" variant="outline" onClick={onNewChat}>
           <MessageSquarePlusIcon />
@@ -31,7 +31,7 @@ export function SessionSidebar({
         </Button>
       </div>
       <ScrollArea className="min-h-0 flex-1">
-        <div className="flex flex-col gap-1 px-2 pb-3">
+        <nav aria-label={pick({ tr: "Sohbetler", en: "Chats" })} className="flex flex-col gap-1 px-2 pb-3">
           {sessions.length === 0 ? (
             <p className="px-2 py-6 text-sm text-muted-foreground">{pick({ tr: "İlk sohbetini başlat.", en: "Start your first conversation." })}</p>
           ) : (
@@ -47,13 +47,14 @@ export function SessionSidebar({
                   type="button"
                   className="min-w-0 flex-1 truncate px-3 py-2 text-left text-sm"
                   onClick={() => onSelect(session.id)}
+                  aria-current={activeId === session.id ? "page" : undefined}
                 >
                   {session.title?.trim() || pick({ tr: "İsimsiz sohbet", en: "Untitled chat" })}
                 </button>
                 <Button
                   variant="ghost"
                   size="icon-xs"
-                  className="mr-1 opacity-0 group-hover:opacity-100"
+                  className="mr-1 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
                   onClick={() => onDelete(session.id)}
                   aria-label={pick({ tr: "Sohbeti sil", en: "Delete chat" })}
                 >
@@ -62,7 +63,7 @@ export function SessionSidebar({
               </div>
             ))
           )}
-        </div>
+        </nav>
       </ScrollArea>
       <div className="border-t pt-3">
         <McpToolsList compact />

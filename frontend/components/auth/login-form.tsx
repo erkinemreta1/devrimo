@@ -23,6 +23,8 @@ export function LoginForm() {
   );
   const [info, setInfo] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const errorId = "auth-form-error";
+  const infoId = "auth-form-info";
 
   function authErrorMessage(caught: unknown) {
     const message = caught instanceof Error ? caught.message : "Authentication failed";
@@ -100,6 +102,8 @@ export function LoginForm() {
               type="email"
               autoComplete="email"
               required
+              aria-invalid={Boolean(error)}
+              aria-describedby={error ? errorId : info ? infoId : undefined}
               placeholder="isim@metu.edu.tr"
               value={email}
               onChange={(event) => setEmail(event.target.value)}
@@ -113,13 +117,15 @@ export function LoginForm() {
               autoComplete={mode === "login" ? "current-password" : "new-password"}
               required
               minLength={6}
+              aria-invalid={Boolean(error)}
+              aria-describedby={error ? errorId : info ? infoId : undefined}
               placeholder={pick({ tr: "En az 6 karakter", en: "At least 6 characters" })}
               value={password}
               onChange={(event) => setPassword(event.target.value)}
             />
           </div>
-          {error ? <p className="break-words text-sm text-destructive">{error}</p> : null}
-          {info ? <p className="break-words rounded-xl bg-accent px-3 py-2.5 text-sm leading-5 text-accent-foreground">{info}</p> : null}
+          {error ? <p id={errorId} role="alert" className="break-words rounded-xl border border-destructive/35 bg-destructive/10 px-3 py-2.5 text-sm text-destructive">{error}</p> : null}
+          {info ? <p id={infoId} role="status" aria-live="polite" className="break-words rounded-xl bg-accent px-3 py-2.5 text-sm leading-5 text-accent-foreground">{info}</p> : null}
           <Button type="submit" disabled={pending} className="w-full">
             {pending ? <Loader2Icon className="animate-spin" /> : null}
             {mode === "login" ? pick({ tr: "Giriş yap", en: "Sign in" }) : pick({ tr: "Hesap oluştur", en: "Create account" })}

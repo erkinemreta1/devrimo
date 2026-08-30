@@ -8,7 +8,7 @@ export function LocaleSwitcher({ className }: { className?: string }) {
   const { locale, setLocale } = useLocale();
 
   return (
-    <div className={cn("inline-flex items-center gap-1 rounded-full border bg-card/80 p-1 shadow-sm backdrop-blur", className)}>
+    <div role="group" aria-label="Dil seçimi / Language selection" className={cn("inline-flex min-h-11 items-center gap-1 rounded-full border bg-card/80 p-1 shadow-sm backdrop-blur", className)}>
       <LanguagesIcon className="ml-1.5 size-3.5 text-muted-foreground" aria-hidden />
       {(["tr", "en"] as const).map((item) => (
         <button
@@ -16,7 +16,7 @@ export function LocaleSwitcher({ className }: { className?: string }) {
           type="button"
           onClick={() => setLocale(item)}
           className={cn(
-            "rounded-full px-2.5 py-1 text-[11px] font-bold tracking-wide transition-colors uppercase",
+            "min-h-9 rounded-full px-3 py-1 text-[11px] font-bold tracking-wide transition-colors uppercase outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
             locale === item ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground",
           )}
           aria-pressed={locale === item}

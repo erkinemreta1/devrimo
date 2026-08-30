@@ -18,7 +18,10 @@ export function LocaleProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const saved = window.localStorage.getItem("devrimo-locale");
     if (saved === "tr" || saved === "en") {
-      queueMicrotask(() => setLocaleState(saved));
+      queueMicrotask(() => {
+        setLocaleState(saved);
+        document.documentElement.lang = saved;
+      });
     }
   }, []);
 

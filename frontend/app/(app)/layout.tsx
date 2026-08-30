@@ -17,8 +17,16 @@ export default async function AppLayout({ children }: { children: React.ReactNod
 
   return (
     <div className="flex h-svh min-h-0 flex-col">
+      <a
+        href="#main-content"
+        className="sr-only z-50 rounded-md bg-background px-4 py-2 font-medium text-foreground shadow-lg focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:ring-2 focus:ring-ring"
+      >
+        Ana içeriğe geç
+      </a>
       <AppHeader email={auth.user.email} />
-      <div className="min-h-0 flex-1">{children}</div>
+      <main id="main-content" tabIndex={-1} className="min-h-0 flex-1 outline-none">
+        {children}
+      </main>
     </div>
   );
 }

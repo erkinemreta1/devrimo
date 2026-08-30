@@ -18,7 +18,7 @@ export function ThemeSwitcher({ className }: { className?: string }) {
 
   return (
     <div
-      className={cn("inline-flex h-9 items-center rounded-xl border border-border bg-background/85 p-1 shadow-sm", className)}
+      className={cn("inline-flex h-11 items-center rounded-xl border border-border bg-background/85 p-1 shadow-sm", className)}
       role="group"
       aria-label={pick({ tr: "Renk teması", en: "Color theme" })}
     >
@@ -35,7 +35,7 @@ export function ThemeSwitcher({ className }: { className?: string }) {
             aria-pressed={active}
             onClick={() => setTheme(value)}
             className={cn(
-              "grid size-7 place-items-center rounded-lg text-muted-foreground transition-colors outline-none",
+              "grid size-9 place-items-center rounded-lg text-muted-foreground transition-colors outline-none",
               "hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
               active && "bg-foreground text-background shadow-sm hover:bg-foreground hover:text-background",
             )}

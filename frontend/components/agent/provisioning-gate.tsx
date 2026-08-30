@@ -20,7 +20,7 @@ export function ProvisioningGate({ children }: { children: ReactNode }) {
 
   if (ensureRunning.isPending || (!agent && !error)) {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
+      <div role="status" aria-live="polite" className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
         <Loader2Icon className="size-6 animate-spin text-muted-foreground" />
         <div>
           <p className="font-medium">{pick({ tr: "Asistanın hazırlanıyor", en: "Setting up your assistant" })}</p>
@@ -35,7 +35,7 @@ export function ProvisioningGate({ children }: { children: ReactNode }) {
   if (agent?.status === "error" || error) {
     const message = agent?.error_detail || (error instanceof Error ? error.message : "Your agent could not be started.");
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-4 px-6 text-center">
+      <div role="alert" className="flex h-full flex-col items-center justify-center gap-4 px-6 text-center">
         <div>
           <p className="font-medium">{pick({ tr: "Asistana ulaşılamıyor", en: "Assistant unavailable" })}</p>
           <p className="mt-1 max-w-md text-sm text-muted-foreground">{message}</p>
@@ -49,7 +49,7 @@ export function ProvisioningGate({ children }: { children: ReactNode }) {
 
   if (agent?.status !== "running") {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
+      <div role="status" aria-live="polite" className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
         <Loader2Icon className="size-6 animate-spin text-muted-foreground" />
         <p className="text-sm text-muted-foreground">{pick({ tr: "Asistanın hazırlanıyor…", en: "Preparing your assistant…" })}</p>
       </div>
