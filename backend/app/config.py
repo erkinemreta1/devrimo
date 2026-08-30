@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     agent_model: str = "muse-spark-1.2-contributor"
     agent_openai_base_url: str = "https://opencode.ai/zen/go/v1"
     agent_openai_api_key: str = ""
-    agent_max_tokens: int = 4096
+    agent_max_tokens: int = 32768
 
     # How many prior runs of a session are replayed into the model's context.
     agent_history_runs: int = 10

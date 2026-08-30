@@ -31,7 +31,7 @@ from app.logging import get_logger
 
 logger = get_logger(__name__)
 
-TURN_LOCK_LEASE_SECONDS = 90
+TURN_LOCK_LEASE_SECONDS = 180
 
 
 async def get_agent(db: AsyncSession, user_id: UUID) -> Agent | None:

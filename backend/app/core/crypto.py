@@ -2,9 +2,12 @@ import base64
 import hashlib
 from functools import lru_cache
 
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken
 
 from app.config import get_settings
+from app.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 def _derive_fernet_key(secret: str) -> bytes:
@@ -23,4 +26,11 @@ def encrypt_secret(plaintext: str) -> bytes:
 
 
 def decrypt_secret(ciphertext: bytes) -> str:
-    return _fernet().decrypt(ciphertext).decode("utf-8")
+    try:
+        return _fernet().decrypt(ciphertext).decode("utf-8")
+    except InvalidToken:
+        logger.error("crypto_decrypt_failed_invalid_token")
+        return ""
+    except Exception as exc:
+        logger.error("crypto_decrypt_failed", error=str(exc))
+        return ""

@@ -19,6 +19,7 @@ the model's context. Only the newest user message is passed in.
 """
 
 import asyncio
+import contextlib
 import json
 import time
 from collections.abc import AsyncIterator
@@ -102,17 +103,37 @@ async def _serialize_run(agno_agent, text: str, session_id: str, user_id: str, m
 
 
 async def _with_keepalive(source: AsyncIterator[bytes]) -> AsyncIterator[bytes]:
-    """Interleave SSE comments so no proxy in the path times out a slow tool call."""
-    iterator = source.__aiter__()
-    while True:
+    """Interleave SSE comments so no proxy in the path times out a slow tool call.
+
+    Uses a queue so ``asyncio.wait_for`` only ever cancels a ``queue.get()``,
+    never the source generator — cancelling an async generator's ``__anext__``
+    throws ``CancelledError`` into it and finalises it, silently killing the
+    stream mid-tool-call.
+    """
+    queue: asyncio.Queue[bytes | None] = asyncio.Queue()
+
+    async def _drain() -> None:
         try:
-            chunk = await asyncio.wait_for(iterator.__anext__(), timeout=KEEPALIVE_SECONDS)
-        except StopAsyncIteration:
-            return
-        except TimeoutError:
-            yield b": keep-alive\n\n"
-            continue
-        yield chunk
+            async for chunk in source:
+                await queue.put(chunk)
+        finally:
+            await queue.put(None)  # sentinel
+
+    task = asyncio.create_task(_drain())
+    try:
+        while True:
+            try:
+                chunk = await asyncio.wait_for(queue.get(), timeout=KEEPALIVE_SECONDS)
+            except TimeoutError:
+                yield b": keep-alive\n\n"
+                continue
+            if chunk is None:
+                return
+            yield chunk
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
 
 
 async def _get_or_create_chat_session(
