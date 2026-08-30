@@ -49,6 +49,27 @@ class Settings(BaseSettings):
     turn_lock_lease_seconds: int = 180
     turn_lock_heartbeat_seconds: int = 60
 
+    # --- Observability (PostHog) -------------------------------------------
+    # Everything below is optional: with no key the whole integration is a
+    # no-op, so a developer without a PostHog project still gets a working
+    # broker. ``posthog_debug`` makes that silence loud during development.
+    posthog_api_key: str = ""  # phc_...
+    posthog_host: str = "https://eu.i.posthog.com"
+    # Only needed for local feature-flag evaluation, which avoids a network
+    # round trip per flag check on the chat hot path.
+    posthog_personal_api_key: str = ""  # phx_...
+    posthog_enabled: bool = True
+    # Whether $ai_input / $ai_output_choices carry real prompt and completion
+    # text. Turning this off downgrades AI observability to metadata only
+    # without touching any call site.
+    posthog_capture_content: bool = True
+    posthog_debug: bool = False
+    # The model is served from an OpenAI-compatible endpoint PostHog has no
+    # price table for, so cost is reported from these instead of inferred.
+    # Prices are per single token, not per million.
+    posthog_input_token_price: float = 0.0
+    posthog_output_token_price: float = 0.0
+
     # --- Campus MCP servers ------------------------------------------------
     # Where the four per-server virtualenvs live on the broker host. The image
     # build installs each one at ``{campus_mcp_root}/{slug}/.venv``.
@@ -80,6 +101,10 @@ class Settings(BaseSettings):
     @property
     def jwks_url(self) -> str:
         return f"{self.supabase_url.rstrip('/')}/auth/v1/.well-known/jwks.json"
+
+    @property
+    def posthog_configured(self) -> bool:
+        return bool(self.posthog_enabled and self.posthog_api_key)
 
     @property
     def agentos_cors_origin_list(self) -> list[str]:

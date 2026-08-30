@@ -37,6 +37,8 @@ from app.config import get_settings
 from app.db.models import ChatSession
 from app.db.session import SessionLocal, get_db
 from app.logging import get_logger
+from app.observability import capture, llm_turn, new_trace_id
+from app.observability.turns import TurnObservation
 from app.schemas import ChatCompletionsRequestIn, ChatConfirmationIn
 
 router = APIRouter()
@@ -67,6 +69,28 @@ def _tool_name(event) -> str | None:
     return getattr(tool, "tool_name", None) or getattr(tool, "name", None)
 
 
+def _tool_server(tool_name: str | None) -> str | None:
+    """The campus server a prefixed tool belongs to (``sais_get_transcript`` -> ``sais``)."""
+    if not tool_name or "_" not in tool_name:
+        return None
+    return tool_name.split("_", 1)[0]
+
+
+def _tool_error_detail(event) -> str:
+    """The message from a ToolCallErrorEvent.
+
+    ``ToolExecution.tool_call_error`` is a flag, not a message — the text lives
+    on the event's ``error`` field, falling back to the tool's own result.
+    """
+    detail = getattr(event, "error", None)
+    if not detail:
+        tool = getattr(event, "tool", None)
+        detail = getattr(tool, "result", None) if tool is not None else None
+    if not detail:
+        detail = getattr(event, "content", None)
+    return str(detail) if detail else "The tool call failed."
+
+
 def _confirmation_payload(event) -> list[dict]:
     requirements = []
     for requirement in getattr(event, "active_requirements", []) or []:
@@ -83,8 +107,13 @@ def _confirmation_payload(event) -> list[dict]:
     return requirements
 
 
-async def _serialize_events(events, model: str, user_id: str) -> AsyncIterator[bytes]:
-    """Agno run events -> OpenAI-compatible SSE."""
+async def _serialize_events(
+    events,
+    model: str,
+    user_id: str,
+    observation: TurnObservation,
+) -> AsyncIterator[bytes]:
+    """Agno run events -> OpenAI-compatible SSE, observed as one PostHog trace."""
     from agno.run.agent import RunEvent
 
     async for event in events:
@@ -96,12 +125,30 @@ async def _serialize_events(events, model: str, user_id: str) -> AsyncIterator[b
                 yield _chunk(model, delta={"role": "assistant", "content": content})
 
         elif name == RunEvent.tool_call_started.value:
-            yield _chunk(model, extension={"type": "tool_call_started", "tool": _tool_name(event)})
+            tool = _tool_name(event)
+            observation.tool_started(tool)
+            yield _chunk(model, extension={"type": "tool_call_started", "tool": tool, "server": _tool_server(tool)})
 
         elif name == RunEvent.tool_call_completed.value:
-            yield _chunk(model, extension={"type": "tool_call_completed", "tool": _tool_name(event)})
+            tool = _tool_name(event)
+            yield _chunk(model, extension={"type": "tool_call_completed", "tool": tool, "server": _tool_server(tool)})
+
+        elif name == RunEvent.tool_call_error.value:
+            # Previously unhandled: Agno emitted this and the broker dropped it,
+            # so a failed tool reached neither the student nor any log. The
+            # agent may still recover on its own, so this is reported without
+            # ending the turn.
+            tool = _tool_name(event)
+            detail = _tool_error_detail(event)
+            logger.warning("agent_tool_call_error", user_id=user_id, tool=tool, detail=detail)
+            observation.tool_failed(tool, detail)
+            yield _chunk(
+                model,
+                extension={"type": "tool_call_error", "tool": tool, "server": _tool_server(tool), "message": detail},
+            )
 
         elif name == RunEvent.run_paused.value:
+            observation.paused = True
             yield _chunk(
                 model,
                 extension={
@@ -112,10 +159,24 @@ async def _serialize_events(events, model: str, user_id: str) -> AsyncIterator[b
                 },
             )
 
+        elif name == RunEvent.run_completed.value:
+            # Token counts, cost and time-to-first-token for the whole turn,
+            # broken down per model role.
+            observation.metrics = getattr(event, "metrics", None)
+
+        elif name == RunEvent.run_cancelled.value:
+            observation.outcome = "cancelled"
+
         elif name == RunEvent.run_error.value:
             detail = getattr(event, "content", None) or "The agent could not complete this turn."
-            logger.error("agent_run_error", user_id=user_id, detail=str(detail))
-            yield _chunk(model, extension={"type": "error", "message": str(detail)}, finish="stop")
+            error_type = getattr(event, "error_type", None)
+            logger.error("agent_run_error", user_id=user_id, detail=str(detail), error_type=error_type)
+            observation.run_failed(str(detail), error_type)
+            yield _chunk(
+                model,
+                extension={"type": "error", "code": error_type or "run_error", "message": str(detail)},
+                finish="stop",
+            )
             return
 
     yield _chunk(model, delta={}, finish="stop")
@@ -128,6 +189,7 @@ async def _serialize_run(
     user_id: str,
     model: str,
     dependencies: dict,
+    observation: TurnObservation,
 ) -> AsyncIterator[bytes]:
     stream = agno_agent.arun(
         input=text,
@@ -137,7 +199,7 @@ async def _serialize_run(
         stream=True,
         stream_events=True,
     )
-    async for chunk in _serialize_events(stream, model, user_id):
+    async for chunk in _serialize_events(stream, model, user_id, observation):
         yield chunk
 
 
@@ -151,7 +213,11 @@ async def _turn_lock_heartbeat(agent_id, owner: str, stop_event: asyncio.Event) 
         except TimeoutError:
             async with SessionLocal() as db:
                 if not await manager.renew_turn_lock(db, agent_id, owner):
+                    # Another replica has taken the lock mid-turn. The turn
+                    # keeps streaming but is no longer protected, so this is
+                    # the signal that two replicas raced.
                     logger.error("turn_lock_heartbeat_lost", agent_id=str(agent_id))
+                    capture("turn_lock_heartbeat_lost", agent_id=str(agent_id), lock_owner=owner)
                     return
 
 
@@ -248,28 +314,46 @@ async def chat_completions(
     chat_session_id = chat_session.id
     user_id = user.id
 
+    trace_id = new_trace_id()
+
     async def stream() -> AsyncIterator[bytes]:
         heartbeat_stop = asyncio.Event()
         heartbeat = asyncio.create_task(_turn_lock_heartbeat(agent.id, lock_owner, heartbeat_stop))
-        try:
-            source = _serialize_run(
-                agno_agent,
-                latest_user_message,
-                agno_session_id,
-                str(user_id),
-                model,
-                dependencies,
-            )
-            async for chunk in _with_keepalive(source):
-                yield chunk
-        except Exception as exc:  # never let a broken stream leave the lock held
-            logger.error("chat_stream_failed", user_id=str(user_id), error=str(exc))
-            yield _chunk(model, extension={"type": "error", "message": "Chat stream failed"}, finish="stop")
-        finally:
-            heartbeat_stop.set()
-            await heartbeat
-            yield b"data: [DONE]\n\n"
-            await _finalize_turn(user_id, chat_session_id, lock_owner, latest_user_message, lease=lease)
+        observation = TurnObservation(
+            trace_id=trace_id,
+            user_id=str(user_id),
+            session_id=chat_session_id,
+            kind="chat_turn",
+        )
+        # Scopes every model call Agno makes for this turn — the answer, the
+        # tool-loop follow-ups, compression and learning — into one trace.
+        with llm_turn(trace_id, chat_session_id):
+            try:
+                source = _serialize_run(
+                    agno_agent,
+                    latest_user_message,
+                    agno_session_id,
+                    str(user_id),
+                    model,
+                    dependencies,
+                    observation,
+                )
+                async for chunk in _with_keepalive(source):
+                    yield chunk
+            except Exception as exc:  # never let a broken stream leave the lock held
+                logger.error("chat_stream_failed", user_id=str(user_id), error=str(exc))
+                observation.stream_failed(exc)
+                yield _chunk(
+                    model,
+                    extension={"type": "error", "code": "stream_failed", "message": "Chat stream failed"},
+                    finish="stop",
+                )
+            finally:
+                heartbeat_stop.set()
+                await heartbeat
+                yield b"data: [DONE]\n\n"
+                observation.finish()
+                await _finalize_turn(user_id, chat_session_id, lock_owner, latest_user_message, lease=lease)
 
     return StreamingResponse(
         stream(),
@@ -345,33 +429,49 @@ async def confirm_tool_call(
 
     model = get_settings().agent_model
 
+    trace_id = new_trace_id()
+    chat_session_id = chat_session.id
+
     async def stream() -> AsyncIterator[bytes]:
         heartbeat_stop = asyncio.Event()
         heartbeat = asyncio.create_task(_turn_lock_heartbeat(agent.id, lock_owner, heartbeat_stop))
-        try:
-            events = agno_agent.acontinue_run(
-                # Resume from the persisted run id. Passing the separately
-                # loaded RunOutput here makes Agno treat it as an in-memory
-                # continuation and can skip rebinding the approved tool to its
-                # live callable after a process/request boundary.
-                run_id=body.run_id,
-                requirements=run_output.requirements,
-                stream=True,
-                stream_events=True,
-                user_id=str(user.id),
-                session_id=agno_session_id,
-                dependencies=dependencies,
-            )
-            async for chunk in _with_keepalive(_serialize_events(events, model, str(user.id))):
-                yield chunk
-        except Exception as exc:
-            logger.error("confirmation_stream_failed", user_id=str(user.id), error=str(exc))
-            yield _chunk(model, extension={"type": "error", "message": "Confirmation failed"}, finish="stop")
-        finally:
-            heartbeat_stop.set()
-            await heartbeat
-            yield b"data: [DONE]\n\n"
-            await _finalize_turn(user.id, chat_session.id, lock_owner, None, lease=lease, increment=False)
+        observation = TurnObservation(
+            trace_id=trace_id,
+            user_id=str(user.id),
+            session_id=chat_session_id,
+            kind="confirmation_turn",
+        )
+        with llm_turn(trace_id, chat_session_id):
+            try:
+                events = agno_agent.acontinue_run(
+                    # Resume from the persisted run id. Passing the separately
+                    # loaded RunOutput here makes Agno treat it as an in-memory
+                    # continuation and can skip rebinding the approved tool to its
+                    # live callable after a process/request boundary.
+                    run_id=body.run_id,
+                    requirements=run_output.requirements,
+                    stream=True,
+                    stream_events=True,
+                    user_id=str(user.id),
+                    session_id=agno_session_id,
+                    dependencies=dependencies,
+                )
+                async for chunk in _with_keepalive(_serialize_events(events, model, str(user.id), observation)):
+                    yield chunk
+            except Exception as exc:
+                logger.error("confirmation_stream_failed", user_id=str(user.id), error=str(exc))
+                observation.stream_failed(exc)
+                yield _chunk(
+                    model,
+                    extension={"type": "error", "code": "confirmation_failed", "message": "Confirmation failed"},
+                    finish="stop",
+                )
+            finally:
+                heartbeat_stop.set()
+                await heartbeat
+                yield b"data: [DONE]\n\n"
+                observation.finish()
+                await _finalize_turn(user.id, chat_session_id, lock_owner, None, lease=lease, increment=False)
 
     return StreamingResponse(
         stream(),

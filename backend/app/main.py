@@ -11,6 +11,9 @@ from app.api.v1 import router as api_v1_router
 from app.campus.manifest import commits_by_slug
 from app.config import get_settings
 from app.logging import configure_logging, get_logger
+from app.observability import ObservabilityMiddleware, capture_exception, get_posthog
+from app.observability.client import shutdown as posthog_shutdown
+from app.observability.logs import shutdown as posthog_logs_shutdown
 
 configure_logging()
 logger = get_logger(__name__)
@@ -27,6 +30,9 @@ async def lifespan(app: FastAPI):
         from app.agents.store import get_agno_db
 
         setup_tracing(db=get_agno_db(), batch_processing=True)
+    # Constructed eagerly so a missing or mis-configured key is reported at
+    # boot rather than discovered later as an absence of data.
+    get_posthog()
     stop_event = asyncio.Event()
     reconciler_task = asyncio.create_task(run_reconciler_loop(stop_event))
     logger.info("startup_complete")
@@ -39,11 +45,19 @@ async def lifespan(app: FastAPI):
         # student's METU credentials in their environment; leaving them
         # parented to a dead broker is not acceptable.
         await reset_pool()
+        # Last, so anything the teardown above reported is still flushed. An
+        # unflushed queue at SIGTERM loses exactly the events that explain
+        # why the process is going away.
+        await asyncio.to_thread(posthog_shutdown)
+        await asyncio.to_thread(posthog_logs_shutdown)
 
 
 app = FastAPI(title="Devrimo Agent Broker", lifespan=lifespan)
 
 settings = get_settings()
+# Added first, so it sits *inside* CORSMiddleware: Starlette applies middleware
+# in reverse, and CORS headers must survive on responses this one observes.
+app.add_middleware(ObservabilityMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origin_list,
@@ -72,4 +86,7 @@ async def root_health() -> dict[str, object]:
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     logger.error("unhandled_exception", path=request.url.path, error=str(exc))
+    # The log line above carries no traceback. This does, plus the request id,
+    # user id and session bound by ObservabilityMiddleware.
+    capture_exception(exc, path=request.url.path, method=request.method, handler="unhandled_exception")
     return JSONResponse(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content={"detail": "Internal server error"})

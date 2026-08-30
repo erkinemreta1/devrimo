@@ -1,17 +1,23 @@
 "use client";
 
-import { usePathname } from "next/navigation";
 import posthog from "posthog-js";
 import { PostHogProvider } from "posthog-js/react";
-import { useEffect, type ReactNode } from "react";
+import { type ReactNode } from "react";
 
-const posthogKey = process.env.NEXT_PUBLIC_POSTHOG_KEY;
-const posthogHost = process.env.NEXT_PUBLIC_POSTHOG_HOST;
-
-let isInitialized = false;
-
+/**
+ * The product event contract.
+ *
+ * This map is the single source of truth for event names *and* their property
+ * shapes — adding a property here and forgetting it at a call site is a
+ * compile error, which is the only reliable way to keep an event schema honest
+ * across a codebase.
+ *
+ * Initialisation lives in `instrumentation-client.ts`, not here: pageviews,
+ * autocapture, session replay and exception capture all need the SDK live
+ * before the first render.
+ */
 type ProductEventProperties = {
-  page_exited: { path: string; duration_seconds: number };
+  // --- chat ---------------------------------------------------------------
   chat_new_clicked: Record<string, never>;
   chat_opened: { source: "history" };
   chat_delete_requested: { was_active: boolean };
@@ -23,71 +29,85 @@ type ProductEventProperties = {
     attachment_count: number;
   };
   chat_response_completed: { duration_seconds: number };
-  chat_response_error: { category: "busy" | "other"; duration_seconds: number | null };
+  chat_response_error: {
+    category: "busy" | "network" | "other";
+    status: number | null;
+    error_code: string | null;
+    duration_seconds: number | null;
+  };
+  // Tool activity the broker streams as `devrimo` extension chunks. The
+  // frontend received these already and threw them away.
+  agent_tool_call: { tool: string | null; server: string | null; status: "started" | "completed" | "error" };
+  // The denominator for the approve/reject funnel: without it, a confirmation
+  // the student simply abandoned is indistinguishable from one never shown.
+  chat_confirmation_shown: { tool: string | null };
   agent_action_confirmation: { approved: boolean; tool: string };
-  theme_changed: { theme: "light" | "dark" };
-  language_changed: { locale: "tr" | "en" };
+
+  // --- agent + campus -----------------------------------------------------
+  agent_provisioned: { result: "success" | "error" };
+  campus_connection_saved: { source: "onboarding" | "settings"; result: "success" | "error"; verification_skipped: boolean };
+  campus_tools_changed: { source: "onboarding" | "settings"; tool_count: number; result: "success" | "error" };
+  campus_disconnected: { result: "success" | "error" };
+
+  // --- onboarding + preferences ------------------------------------------
   onboarding_step_viewed: { step: "welcome" | "connect" | "tools" | "ready" };
   onboarding_connection_result: { result: "success" | "error"; verification_skipped: boolean };
   onboarding_tool_selection_saved: { tool_count: number; result: "success" | "error" };
   onboarding_finished: { path: "completed" | "skipped" };
+  theme_changed: { theme: "light" | "dark" };
+  language_changed: { locale: "tr" | "en" };
+  settings_opened: Record<string, never>;
 };
 
-function initializePostHog() {
-  if (isInitialized) return true;
-  if (!posthogKey || !posthogHost) return false;
-
-  posthog.init(posthogKey, {
-    api_host: posthogHost,
-    autocapture: false,
-    capture_pageview: false,
-    capture_pageleave: false,
-    disable_session_recording: true,
-    disable_surveys: true,
-    person_profiles: "never",
-  });
-
-  isInitialized = true;
-  return true;
+function isReady() {
+  return typeof window !== "undefined" && posthog.__loaded;
 }
 
 export function captureProductEvent<EventName extends keyof ProductEventProperties>(
   event: EventName,
   properties: ProductEventProperties[EventName],
 ) {
-  if (!initializePostHog()) return;
+  if (!isReady()) return;
   posthog.capture(event, properties);
 }
 
-function AnonymousPageView() {
-  const pathname = usePathname();
+/**
+ * Report a handled error that would otherwise only become a toast.
+ *
+ * The app catches almost everything and shows a `sonner` message, which is
+ * right for the student and useless for us — these calls are what make those
+ * failures countable.
+ */
+export function captureError(error: unknown, context: Record<string, unknown> = {}) {
+  if (!isReady()) return;
+  const exception = error instanceof Error ? error : new Error(String(error));
+  posthog.captureException(exception, context);
+}
 
-  useEffect(() => {
-    if (!initializePostHog()) return;
+/**
+ * Link this browser to a student.
+ *
+ * The Supabase user id and nothing else: email is personal data that the
+ * broker already holds and PostHog has no need for. Safe to call repeatedly —
+ * PostHog ignores an identify for the id it already has.
+ */
+export function identifyStudent(userId: string) {
+  if (!isReady() || !userId) return;
+  posthog.identify(userId);
+}
 
-    const enteredAt = Date.now();
-
-    // Deliberately exclude the query string: it can contain auth/navigation data.
-    posthog.capture("$pageview", {
-      $current_url: `${window.location.origin}${pathname}`,
-    });
-
-    return () => {
-      captureProductEvent("page_exited", {
-        path: pathname,
-        duration_seconds: Math.max(0, Math.round((Date.now() - enteredAt) / 1000)),
-      });
-    };
-  }, [pathname]);
-
-  return null;
+/**
+ * Break the link on sign-out.
+ *
+ * Without this, the next person to use a shared machine — a lab computer, a
+ * friend's laptop — inherits the previous student's identity and their events
+ * land on the wrong person.
+ */
+export function resetStudent() {
+  if (!isReady()) return;
+  posthog.reset();
 }
 
 export function PostHogAnalytics({ children }: { children: ReactNode }) {
-  return (
-    <PostHogProvider client={posthog}>
-      <AnonymousPageView />
-      {children}
-    </PostHogProvider>
-  );
+  return <PostHogProvider client={posthog}>{children}</PostHogProvider>;
 }

@@ -29,6 +29,7 @@ from app.campus import service as campus_service
 from app.config import get_settings
 from app.db.models import Agent, AgentStatus
 from app.logging import get_logger
+from app.observability import capture_exception
 
 logger = get_logger(__name__)
 
@@ -88,6 +89,11 @@ async def resident_for(db: AsyncSession, agent: Agent) -> ResidentAgent:
         agent.error_detail = str(exc)
         await db.commit()
         logger.error("agent_build_failed", user_id=str(agent.user_id), error=str(exc))
+        capture_exception(
+            exc,
+            distinct_id=str(agent.user_id),
+            **{"$exception_fingerprint": ["agent_build_failed"]},
+        )
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Could not start agent: {exc}") from exc
 
     if agent.status != AgentStatus.running or agent.error_detail:
@@ -113,6 +119,11 @@ async def lease_for(db: AsyncSession, agent: Agent) -> ResidentLease:
         agent.error_detail = str(exc)
         await db.commit()
         logger.error("agent_build_failed", user_id=str(agent.user_id), error=str(exc))
+        capture_exception(
+            exc,
+            distinct_id=str(agent.user_id),
+            **{"$exception_fingerprint": ["agent_build_failed"]},
+        )
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Could not start agent: {exc}") from exc
 
     if agent.status != AgentStatus.running or agent.error_detail:

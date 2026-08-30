@@ -18,6 +18,7 @@ from app.campus.verify import normalize_username, verify_metu_credentials
 from app.db.models import AgentStatus
 from app.db.session import get_db
 from app.logging import get_logger
+from app.observability import capture_exception
 from app.schemas import (
     CampusConnectionIn,
     CampusConnectionOut,
@@ -151,3 +152,10 @@ async def _reconfigure_agent_if_running(db: AsyncSession, user_id) -> None:
         await manager.apply_campus_config(db, agent)
     except Exception as exc:
         logger.warning("campus_apply_failed", user_id=str(user_id), error=str(exc))
+        # The save succeeded and config_dirty stays set, so the student can
+        # retry — but a rebuild that fails every time needs to be visible.
+        capture_exception(
+            exc,
+            distinct_id=str(user_id),
+            **{"$exception_fingerprint": ["campus_apply_failed"]},
+        )

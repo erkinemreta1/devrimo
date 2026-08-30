@@ -18,6 +18,7 @@ from datetime import UTC, datetime, timedelta
 from app.agents.pool import get_pool
 from app.config import get_settings
 from app.logging import get_logger
+from app.observability import capture_exception
 
 logger = get_logger(__name__)
 
@@ -37,7 +38,10 @@ async def run_reconciler_loop(stop_event: asyncio.Event) -> None:
         try:
             await reconcile_once()
         except Exception as exc:
+            # The loop deliberately survives a bad iteration, which is exactly
+            # why nothing would otherwise notice it failing every minute.
             logger.error("reconcile_iteration_failed", error=str(exc))
+            capture_exception(exc, **{"$exception_fingerprint": ["reconcile_iteration_failed"]})
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=settings.reconcile_interval_seconds)
         except TimeoutError:

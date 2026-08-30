@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useLocale } from "@/components/locale-provider";
+import { captureError, identifyStudent } from "@/components/posthog-analytics";
 
 export function LoginForm() {
   const { pick } = useLocale();
@@ -57,6 +58,10 @@ export function LoginForm() {
         });
         if (signInError) throw signInError;
         if (!data.session) throw new Error("Giriş tamamlandı ancak oturum oluşturulamadı.");
+        // Identified here as well as in the authenticated layout, so the
+        // sign-in itself lands on the student rather than on the anonymous
+        // device that preceded it.
+        identifyStudent(data.session.user.id);
         setInfo("Giriş başarılı, asistanın açılıyor…");
         window.location.replace(next);
         return;
@@ -72,11 +77,13 @@ export function LoginForm() {
       });
       if (signUpError) throw signUpError;
       if (data.session) {
+        identifyStudent(data.session.user.id);
         window.location.assign(next);
         return;
       }
       setInfo("Hesabını etkinleştirmek için e-posta adresine gönderdiğimiz bağlantıyı aç.");
     } catch (caught) {
+      captureError(caught, { source: "auth", mode });
       setError(authErrorMessage(caught));
     } finally {
       setPending(false);

@@ -22,3 +22,9 @@ openai>=1.60,<4.0
 # Agno's database layer is synchronous and builds its own engine, so Postgres
 # deployments need the sync driver alongside asyncpg.
 psycopg[binary]>=3.2,<4.0
+# Observability. `posthog` arrives transitively via agno, but every LLM
+# generation, exception, and log line in this service depends on it, so it is
+# pinned here rather than left to a transitive resolution. The `otel` extra
+# brings the OTLP HTTP exporter used to ship structlog output to PostHog Logs.
+posthog[otel]>=7.44,<8.0
+opentelemetry-exporter-otlp-proto-http>=1.28,<2.0

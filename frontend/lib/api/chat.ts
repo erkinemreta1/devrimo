@@ -14,9 +14,23 @@ export type ChatConfirmation = {
   requirements: ChatConfirmationRequirement[];
 };
 
+export type ChatToolEvent = {
+  status: "started" | "completed" | "error";
+  tool: string | null;
+  server: string | null;
+  message: string | null;
+};
+
+export type ChatStreamError = {
+  code: string | null;
+  message: string;
+};
+
 export type ChatStreamEvent =
   | { type: "text"; delta: string }
-  | { type: "confirmation"; confirmation: ChatConfirmation };
+  | { type: "confirmation"; confirmation: ChatConfirmation }
+  | { type: "tool"; tool: ChatToolEvent }
+  | { type: "error"; error: ChatStreamError };
 
 export type ChatContinuation = {
   text: string;
@@ -47,6 +61,12 @@ export function deleteChatSession(token: string, sessionId: string) {
   return apiFetch<void>(`/chat/sessions/${sessionId}`, { method: "DELETE", token });
 }
 
+const TOOL_EVENT_STATUS: Record<string, ChatToolEvent["status"]> = {
+  tool_call_started: "started",
+  tool_call_completed: "completed",
+  tool_call_error: "error",
+};
+
 function parseSseEvent(data: string): ChatStreamEvent | null {
   if (!data || data === "[DONE]") return null;
   try {
@@ -54,6 +74,10 @@ function parseSseEvent(data: string): ChatStreamEvent | null {
       choices?: Array<{ delta?: { content?: string }; message?: { content?: string } }>;
       devrimo?: {
         type?: string;
+        code?: string;
+        message?: string;
+        tool?: string;
+        server?: string;
         run_id?: string;
         session_id?: string;
         requirements?: ChatConfirmationRequirement[];
@@ -73,6 +97,26 @@ function parseSseEvent(data: string): ChatStreamEvent | null {
         },
       };
     }
+    // Tool activity and typed errors were previously parsed away here, so a
+    // failing campus tool was invisible to the student and to analytics alike.
+    const toolStatus = json.devrimo?.type ? TOOL_EVENT_STATUS[json.devrimo.type] : undefined;
+    if (toolStatus) {
+      return {
+        type: "tool",
+        tool: {
+          status: toolStatus,
+          tool: json.devrimo?.tool ?? null,
+          server: json.devrimo?.server ?? null,
+          message: json.devrimo?.message ?? null,
+        },
+      };
+    }
+    if (json.devrimo?.type === "error") {
+      return {
+        type: "error",
+        error: { code: json.devrimo.code ?? null, message: json.devrimo.message ?? "Chat failed" },
+      };
+    }
     const delta = json.choices?.[0]?.delta?.content ?? json.choices?.[0]?.message?.content ?? "";
     return delta ? { type: "text", delta } : null;
   } catch {
@@ -83,6 +127,7 @@ function parseSseEvent(data: string): ChatStreamEvent | null {
 export async function* streamChatCompletions(
   token: string,
   request: ChatCompletionsRequest,
+  tracingHeaders: Record<string, string> = {},
 ): AsyncGenerator<ChatStreamEvent> {
   const response = await fetch(`${getApiBaseUrl()}/api/v1/chat/completions`, {
     method: "POST",
@@ -90,6 +135,7 @@ export async function* streamChatCompletions(
       Accept: "text/event-stream",
       "Content-Type": "application/json",
       Authorization: `Bearer ${token}`,
+      ...tracingHeaders,
     },
     body: JSON.stringify({
       // The broker picks the model from AGENT_MODEL; this is only a label
@@ -141,6 +187,7 @@ export async function continueChatRun(
   confirmation: ChatConfirmation,
   requirementId: string,
   approved: boolean,
+  tracingHeaders: Record<string, string> = {},
 ): Promise<ChatContinuation> {
   const response = await fetch(`${getApiBaseUrl()}/api/v1/chat/confirmations`, {
     method: "POST",
@@ -148,6 +195,7 @@ export async function continueChatRun(
       Accept: "text/event-stream",
       "Content-Type": "application/json",
       Authorization: `Bearer ${token}`,
+      ...tracingHeaders,
     },
     body: JSON.stringify({
       run_id: confirmation.run_id,
@@ -177,6 +225,7 @@ export async function continueChatRun(
       const event = parseSseEvent(trimmed.slice(5).trim());
       if (event?.type === "text") text += event.delta;
       if (event?.type === "confirmation") nextConfirmation = event.confirmation;
+      if (event?.type === "error") throw new Error(event.error.message);
     }
   }
   return { text, confirmation: nextConfirmation };
