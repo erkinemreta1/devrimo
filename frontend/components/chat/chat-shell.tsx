@@ -21,8 +21,8 @@ import {
   AlertDialogMedia,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { captureProductEvent } from "@/components/posthog-analytics";
-import type { ChatConfirmation } from "@/lib/api/chat";
+import { captureError, captureProductEvent } from "@/components/posthog-analytics";
+import type { ChatConfirmation, ChatStreamError, ChatToolEvent } from "@/lib/api/chat";
 
 function toUiMessages(sessionId: string, messages: { role: string; content: string; id?: string }[]): UIMessage[] {
   return messages.map((message, index) => ({
@@ -34,6 +34,7 @@ function toUiMessages(sessionId: string, messages: { role: string; content: stri
 
 class ChatTelemetry {
   private requestStartedAt: number | null = null;
+  private streamError: ChatStreamError | null = null;
 
   readonly transport = new AssistantChatTransport({
     api: "/api/chat",
@@ -45,6 +46,7 @@ class ChatTelemetry {
       ) ?? 0;
       const attachmentCount = latestMessage?.parts.filter((part) => part.type === "file").length ?? 0;
       this.requestStartedAt = Date.now();
+      this.streamError = null;
       captureProductEvent("chat_message_sent", {
         conversation_type: id ? "existing" : "new",
         message_position: messages.length,
@@ -59,6 +61,17 @@ class ChatTelemetry {
     const startedAt = this.requestStartedAt;
     this.requestStartedAt = null;
     return startedAt ? Math.max(0, Math.round((Date.now() - startedAt) / 1000)) : null;
+  }
+
+  setStreamError(error: ChatStreamError) {
+    this.streamError = error;
+  }
+
+  /** The broker's typed error for this turn, consumed once by `onError`. */
+  takeStreamError() {
+    const error = this.streamError;
+    this.streamError = null;
+    return error;
   }
 }
 
@@ -81,22 +94,56 @@ function AssistantThread({
     messages: initialMessages,
     transport: telemetry.transport,
     onThreadIdChange: onThreadReady,
-    onFinish: () => {
+    onFinish: ({ isError }) => {
+      // AI SDK invokes onFinish for both success and failure. Error analytics
+      // are emitted by onError, so counting this as completed would corrupt
+      // the completion-rate denominator.
+      if (isError) return;
       captureProductEvent("chat_response_completed", {
         duration_seconds: telemetry.finishDuration() ?? 0,
       });
     },
     onData: (part: DataUIPart<Record<string, unknown>>) => {
+      if (part.type === "data-tool") {
+        // Tool activity the broker streams. The server records the
+        // authoritative $ai_span; this is the student-visible half — what the
+        // UI was told, and when.
+        const tool = part.data as unknown as ChatToolEvent;
+        captureProductEvent("agent_tool_call", {
+          tool: tool.tool,
+          server: tool.server,
+          status: tool.status,
+        });
+        return;
+      }
+      if (part.type === "data-stream-error") {
+        telemetry.setStreamError(part.data as unknown as ChatStreamError);
+        return;
+      }
       if (part.type !== "data-confirmation") return;
-      setPendingConfirmation(part.data as ChatConfirmation);
+      const confirmation = part.data as ChatConfirmation;
+      captureProductEvent("chat_confirmation_shown", {
+        tool: confirmation.requirements[0]?.tool ?? null,
+      });
+      setPendingConfirmation(confirmation);
     },
     onError: (error) => {
       const message = error instanceof Error ? error.message : "Chat failed";
-      const busy = message.includes("409") || message.toLowerCase().includes("busy");
+      // The broker now sends a typed code on its error chunks, so this no
+      // longer has to guess an error's nature by searching its prose.
+      const streamError = telemetry.takeStreamError();
+      const busy =
+        streamError?.code === "agent_busy" ||
+        message.includes("409") ||
+        message.toLowerCase().includes("busy");
+      const network = !busy && /failed to fetch|network|load failed/i.test(message);
       captureProductEvent("chat_response_error", {
-        category: busy ? "busy" : "other",
+        category: busy ? "busy" : network ? "network" : "other",
+        status: busy ? 409 : null,
+        error_code: streamError?.code ?? null,
         duration_seconds: telemetry.finishDuration(),
       });
+      captureError(error, { source: "chat_stream", error_code: streamError?.code ?? null });
       toast.error(
         busy
           ? "Your agent is answering another message. Please wait."
@@ -142,6 +189,7 @@ function AssistantThread({
       setPendingConfirmation(payload.confirmation ?? null);
       captureProductEvent("agent_action_confirmation", { approved, tool: requirement.tool });
     } catch (error) {
+      captureError(error, { source: "chat_confirmation" });
       toast.error(error instanceof Error ? error.message : "Confirmation failed");
     } finally {
       setConfirmationPending(false);
@@ -203,6 +251,7 @@ export function ChatShell() {
       setChatKey((value) => value + 1);
       captureProductEvent("chat_opened", { source: "history" });
     } catch (error) {
+      captureError(error, { source: "chat_load_session" });
       toast.error(error instanceof Error ? error.message : "Could not load session");
     }
   }
@@ -228,6 +277,7 @@ export function ChatShell() {
       captureProductEvent("chat_deleted", { was_active: wasActive });
       toast.success(pick({ tr: "Sohbet silindi.", en: "Chat deleted." }));
     } catch (error) {
+      captureError(error, { source: "chat_delete_session" });
       toast.error(error instanceof Error ? error.message : "Could not delete session");
     }
   }

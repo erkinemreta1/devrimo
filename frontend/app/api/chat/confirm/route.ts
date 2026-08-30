@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { continueChatRun, type ChatConfirmation } from "@/lib/api/chat";
 import { requireAuth } from "@/lib/api/route-utils";
+import { tracingHeadersFrom } from "@/lib/posthog-server";
 
 export const maxDuration = 600;
 
@@ -23,6 +24,7 @@ export async function POST(request: Request) {
       body.confirmation,
       body.requirement_id,
       body.approved,
+      tracingHeadersFrom(request),
     );
     return NextResponse.json(continuation);
   } catch (error) {

@@ -15,6 +15,7 @@ from dataclasses import dataclass
 import httpx
 
 from app.logging import get_logger
+from app.observability import capture_exception
 
 logger = get_logger(__name__)
 
@@ -51,8 +52,10 @@ async def verify_metu_credentials(username: str, password: str, timeout: float =
         ) as client:
             response = await client.post(SIGNIN_URL, json=payload, headers={"X-Requested-With": "XMLHttpRequest"})
     except httpx.HTTPError as exc:
-        # Never log the payload — it carries the password.
+        # Never log the payload — it carries the password. The exception
+        # itself is safe: httpx errors name the URL, not the body.
         logger.warning("metu_verify_unreachable", error=str(exc))
+        capture_exception(exc, url=SIGNIN_URL, **{"$exception_fingerprint": ["metu_verify_unreachable"]})
         return VerificationResult(ok=False, unreachable=True, detail="Could not reach METU sign-in right now.")
 
     if response.status_code != 200:

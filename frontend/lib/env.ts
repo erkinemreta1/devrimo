@@ -19,3 +19,34 @@ export function isSupabaseConfigured() {
 export function getApiBaseUrl() {
   return process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") || "http://localhost:8000";
 }
+
+export function getPostHogKey() {
+  return process.env.NEXT_PUBLIC_POSTHOG_KEY ?? "";
+}
+
+export function getPostHogHost() {
+  // EU cloud. Kept as a variable rather than a constant because a self-hosted
+  // instance or a reverse proxy changes it, and hardcoding it there means
+  // events go to the wrong place silently.
+  return process.env.NEXT_PUBLIC_POSTHOG_HOST || "https://eu.i.posthog.com";
+}
+
+export function isPostHogConfigured() {
+  return Boolean(getPostHogKey());
+}
+
+/**
+ * Hostnames PostHog attaches tracing headers to.
+ *
+ * The browser only ever calls this app's own origin — `app/api/**` proxies
+ * everything through to the FastAPI broker — so this is the app's hostname,
+ * never the broker's. Ports are not part of a hostname: "localhost:3000" would
+ * match nothing at all.
+ */
+export function getTracingHostnames() {
+  const configured = process.env.NEXT_PUBLIC_POSTHOG_TRACING_HOSTS;
+  if (configured) {
+    return configured.split(",").map((host) => host.trim()).filter(Boolean);
+  }
+  return ["localhost", "127.0.0.1"];
+}

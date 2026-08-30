@@ -2,6 +2,7 @@ import { createUIMessageStream, createUIMessageStreamResponse } from "ai";
 import type { UIMessage } from "ai";
 import { streamChatCompletions } from "@/lib/api/chat";
 import { requireAuth } from "@/lib/api/route-utils";
+import { distinctIdFromCookies, getPostHogServer, tracingHeadersFrom } from "@/lib/posthog-server";
 import type { ChatMessage, ChatRole } from "@/lib/types";
 
 function textFromParts(message: UIMessage) {
@@ -35,24 +36,43 @@ export async function POST(request: Request) {
   const messages = toChatMessages(body.messages ?? []);
   const clientId = body.id;
   const textId = "assistant-text";
+  // Forwarded to the broker so its LLM traces, exceptions and logs land on the
+  // same person and the same session replay as this browser's events.
+  const tracing = tracingHeadersFrom(request);
+  const distinctId = distinctIdFromCookies(request.headers.get("cookie") ?? undefined);
 
   const stream = createUIMessageStream({
     execute: async ({ writer }) => {
       writer.write({ type: "text-start", id: textId });
       try {
-        for await (const event of streamChatCompletions(result.auth.accessToken, {
-          messages,
-          client_id: clientId,
-          stream: true,
-        })) {
+        for await (const event of streamChatCompletions(
+          result.auth.accessToken,
+          { messages, client_id: clientId, stream: true },
+          tracing,
+        )) {
           if (event.type === "text") {
             writer.write({ type: "text-delta", id: textId, delta: event.delta });
-          } else {
+          } else if (event.type === "confirmation") {
             writer.write({ type: "data-confirmation", data: event.confirmation });
+          } else if (event.type === "tool") {
+            writer.write({ type: "data-tool", data: event.tool });
+          } else {
+            // Preserve the typed code for product analytics, then emit the AI
+            // SDK's standard error chunk so the runtime actually enters its
+            // error path and the student sees the failure.
+            writer.write({ type: "data-stream-error", data: event.error });
+            writer.write({ type: "error", errorText: event.error.message });
           }
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : "Chat failed";
+        // Previously this message went into the stream and nowhere else: a
+        // broker that was down produced a toast and no record anywhere.
+        getPostHogServer()?.captureException(
+          error instanceof Error ? error : new Error(message),
+          distinctId ?? undefined,
+          { source: "chat_proxy", chat_session_id: clientId ?? null },
+        );
         writer.write({ type: "error", errorText: message });
       }
       writer.write({ type: "text-end", id: textId });

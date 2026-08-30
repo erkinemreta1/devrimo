@@ -20,7 +20,7 @@ import { CampusToolToggle } from "@/components/onboarding/campus-tool-toggle";
 import { StepIndicator } from "@/components/onboarding/step-indicator";
 import { ONBOARDING_STEPS, stepIndex, type OnboardingStep } from "@/components/onboarding/steps";
 import type { CampusTool } from "@/lib/types";
-import { captureProductEvent } from "@/components/posthog-analytics";
+import { captureError, captureProductEvent } from "@/components/posthog-analytics";
 
 const STARTER_PROMPTS = {
   tr: [
@@ -119,6 +119,11 @@ export function OnboardingFlow({ onDone }: { onDone?: () => void }) {
         result: "success",
         verification_skipped: skipVerification,
       });
+      captureProductEvent("campus_connection_saved", {
+        source: "onboarding",
+        result: "success",
+        verification_skipped: skipVerification,
+      });
       if (!result.verified_at && result.verification_error) {
         setWarning(result.verification_error);
       }
@@ -128,6 +133,12 @@ export function OnboardingFlow({ onDone }: { onDone?: () => void }) {
         result: "error",
         verification_skipped: skipVerification,
       });
+      captureProductEvent("campus_connection_saved", {
+        source: "onboarding",
+        result: "error",
+        verification_skipped: skipVerification,
+      });
+      captureError(error, { source: "onboarding_connect" });
       setFormError(error instanceof Error ? error.message : "Could not save your METU connection.");
     }
   }
@@ -148,12 +159,23 @@ export function OnboardingFlow({ onDone }: { onDone?: () => void }) {
         tool_count: enabledTools.length,
         result: "success",
       });
+      captureProductEvent("campus_tools_changed", {
+        source: "onboarding",
+        tool_count: enabledTools.length,
+        result: "success",
+      });
       goTo("ready");
     } catch (error) {
       captureProductEvent("onboarding_tool_selection_saved", {
         tool_count: enabledTools.length,
         result: "error",
       });
+      captureProductEvent("campus_tools_changed", {
+        source: "onboarding",
+        tool_count: enabledTools.length,
+        result: "error",
+      });
+      captureError(error, { source: "onboarding_tool_selection" });
       setFormError(error instanceof Error ? error.message : "Could not save your tool selection.");
     }
   }
@@ -170,6 +192,7 @@ export function OnboardingFlow({ onDone }: { onDone?: () => void }) {
       captureProductEvent("onboarding_finished", { path: "completed" });
       onDone?.();
     } catch (error) {
+      captureError(error, { source: "onboarding_finish" });
       setFormError(error instanceof Error ? error.message : "Could not finish setup.");
     }
   }

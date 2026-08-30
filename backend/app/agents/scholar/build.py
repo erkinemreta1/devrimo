@@ -9,6 +9,7 @@ from app.agents.scholar.learning import build_compression, build_learning
 from app.agents.scholar.prompt import runtime_instructions
 from app.agents.store import get_agno_db
 from app.config import get_settings
+from app.observability.flags import FLAG_HISTORY_RUNS, FLAG_TOOL_CALL_LIMIT, int_payload
 
 
 def build_scholar_agent(connected: list[MCPTools]) -> Agent:
@@ -23,11 +24,13 @@ def build_scholar_agent(connected: list[MCPTools]) -> Agent:
         db=get_agno_db(),
         tools=list(connected),
         tool_hooks=[production_tool_hook],
-        tool_call_limit=settings.agent_tool_call_limit,
+        # Tunable without a deploy: a model looping through tool calls is a
+        # live incident, and this is the dial that stops it.
+        tool_call_limit=int_payload(FLAG_TOOL_CALL_LIMIT, default=settings.agent_tool_call_limit),
         instructions=runtime_instructions(connected),
         use_instruction_tags=True,
         add_history_to_context=True,
-        num_history_runs=settings.scholar_history_runs,
+        num_history_runs=int_payload(FLAG_HISTORY_RUNS, default=settings.scholar_history_runs),
         # Dependencies are rendered into the system instructions. Agno's
         # add_dependencies_to_context option appends them to—and persists them
         # inside—the user message, which corrupts history and leaks metadata to

@@ -25,6 +25,8 @@ from mcp import StdioServerParameters
 
 from app.campus.mcp_config import CampusServerSpec
 from app.logging import get_logger
+from app.observability import capture, capture_exception
+from app.observability.flags import enabled_campus_tool_ids
 
 logger = get_logger(__name__)
 
@@ -51,6 +53,7 @@ def _prepare_working_dir(path: str) -> bool:
         Path(path).mkdir(parents=True, exist_ok=True, mode=0o700)
     except OSError as exc:
         logger.warning("campus_state_dir_unavailable", path=path, error=str(exc))
+        capture_exception(exc, path=path, **{"$exception_fingerprint": ["campus_state_dir_unavailable"]})
         return False
     return True
 
@@ -62,6 +65,16 @@ def build_toolkits(specs: list[CampusServerSpec], *, timeout_seconds: int) -> li
     reasoning as :func:`connect_toolkits`: one unavailable campus tool must not
     cost the student their whole agent.
     """
+    # A remote kill switch for a campus server that has started misbehaving.
+    # With no flag set this returns every spec unchanged, so the student's own
+    # tool selection remains the only thing that decides.
+    allowed = enabled_campus_tool_ids([spec.tool_id for spec in specs])
+    if len(allowed) != len(specs):
+        blocked = [spec.tool_id for spec in specs if spec.tool_id not in allowed]
+        logger.warning("campus_servers_disabled_by_flag", servers=blocked)
+        capture("campus_servers_disabled_by_flag", servers=blocked)
+        specs = [spec for spec in specs if spec.tool_id in allowed]
+
     toolkits: list[MCPTools] = []
     for spec in specs:
         if spec.cwd and not _prepare_working_dir(spec.cwd):
@@ -120,9 +133,21 @@ async def connect_toolkits(toolkits: list[MCPTools]) -> list[MCPTools]:
             await toolkit.connect()
         except Exception as exc:  # defensive: connect() is documented not to raise
             logger.warning("campus_server_connect_failed", server=toolkit.name, error=str(exc))
+            # Grouped by server, not by stack: every one of these is "this
+            # campus server is down", and one issue per server is the useful
+            # shape. Without this the student simply finds the agent quietly
+            # unable to do something it could do yesterday.
+            capture_exception(
+                exc,
+                server=toolkit.name,
+                **{"$exception_fingerprint": ["campus_server_connect_failed", str(toolkit.name)]},
+            )
             continue
         if not _is_connected(toolkit):
+            # No exception to attach: MCPTools.connect() swallows its own
+            # failures, so this silent case gets an event of its own.
             logger.warning("campus_server_unavailable", server=toolkit.name)
+            capture("campus_server_unavailable", server=toolkit.name)
             await close_toolkits([toolkit])
             continue
         connected.append(toolkit)
@@ -141,4 +166,11 @@ async def close_toolkits(toolkits: list[MCPTools]) -> None:
         try:
             await toolkit.close()
         except (Exception, asyncio.CancelledError) as exc:
+            # A subprocess that would not close is still holding a student's
+            # METU credentials in its environment.
             logger.warning("campus_server_close_failed", server=toolkit.name, error=str(exc))
+            capture_exception(
+                exc,
+                server=toolkit.name,
+                **{"$exception_fingerprint": ["campus_server_close_failed", str(toolkit.name)]},
+            )

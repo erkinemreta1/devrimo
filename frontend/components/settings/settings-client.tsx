@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect } from "react";
 import { toast } from "sonner";
 import { Loader2Icon } from "lucide-react";
 import { useAgent } from "@/hooks/useAgent";
@@ -21,12 +22,19 @@ import { useLocale } from "@/components/locale-provider";
 import { CampusConnectionCard } from "@/components/settings/campus-connection-card";
 import { useProfile } from "@/hooks/useProfile";
 import { useMemories } from "@/hooks/useMemories";
+import { captureProductEvent } from "@/components/posthog-analytics";
 
 export function SettingsClient() {
   const { pick } = useLocale();
   const { agent, isLoading, ensureRunning, stop, destroy, refetch } = useAgent();
   const { update: updateProfile } = useProfile();
   const { memories, isLoading: memoriesLoading, clear: clearMemories } = useMemories();
+
+  // Settings is where a struggling student goes to disconnect or reset. Knowing
+  // they got here is the leading indicator for the churn events below it.
+  useEffect(() => {
+    captureProductEvent("settings_opened", {});
+  }, []);
 
   async function run(action: () => Promise<unknown>, success: string) {
     try {

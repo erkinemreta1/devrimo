@@ -6,17 +6,31 @@ import { useAgent } from "@/hooks/useAgent";
 import { Button } from "@/components/ui/button";
 import type { ReactNode } from "react";
 import { useLocale } from "@/components/locale-provider";
+import { captureError, captureProductEvent } from "@/components/posthog-analytics";
 
 export function ProvisioningGate({ children }: { children: ReactNode }) {
   const { pick } = useLocale();
   const { agent, error, ensureRunning } = useAgent();
   const attempted = useRef(false);
 
+  const reported = useRef<string | null>(null);
+
   useEffect(() => {
     if (attempted.current) return;
     attempted.current = true;
     ensureRunning.mutate();
   }, [ensureRunning]);
+
+  // A student stuck on "Assistant unavailable" is the most severe failure this
+  // app has, and until now it produced no signal at all.
+  useEffect(() => {
+    const failed = agent?.status === "error" || Boolean(error);
+    const outcome = failed ? "error" : agent?.status === "running" ? "success" : null;
+    if (!outcome || reported.current === outcome) return;
+    reported.current = outcome;
+    captureProductEvent("agent_provisioned", { result: outcome });
+    if (failed && error) captureError(error, { source: "provisioning_gate" });
+  }, [agent?.status, error]);
 
   if (ensureRunning.isPending || (!agent && !error)) {
     return (

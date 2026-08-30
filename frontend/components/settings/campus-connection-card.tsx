@@ -21,6 +21,7 @@ import {
 import { CampusToolToggle } from "@/components/onboarding/campus-tool-toggle";
 import { useLocale } from "@/components/locale-provider";
 import { useCampus } from "@/hooks/useCampus";
+import { captureError, captureProductEvent } from "@/components/posthog-analytics";
 
 /**
  * Manage the METU connection after onboarding.
@@ -66,6 +67,16 @@ export function CampusConnectionCard() {
       });
       setPassword("");
       setSelected(null);
+      captureProductEvent("campus_connection_saved", {
+        source: "settings",
+        result: "success",
+        verification_skipped: !result.verified_at,
+      });
+      captureProductEvent("campus_tools_changed", {
+        source: "settings",
+        tool_count: enabled.length,
+        result: "success",
+      });
       toast.success(
         result.verified_at
           ? pick({ tr: "ODTÜ bağlantın güncellendi.", en: "Your METU connection is updated." })
@@ -75,15 +86,24 @@ export function CampusConnectionCard() {
             }),
       );
     } catch (error) {
+      captureProductEvent("campus_connection_saved", {
+        source: "settings",
+        result: "error",
+        verification_skipped: false,
+      });
+      captureError(error, { source: "settings_campus_save" });
       toast.error(error instanceof Error ? error.message : "Could not save.");
     }
   }
 
-  async function run(action: () => Promise<unknown>, success: string) {
+  async function run(action: () => Promise<unknown>, success: string, event?: "campus_disconnected") {
     try {
       await action();
+      if (event) captureProductEvent(event, { result: "success" });
       toast.success(success);
     } catch (error) {
+      if (event) captureProductEvent(event, { result: "error" });
+      captureError(error, { source: "settings_campus_action" });
       toast.error(error instanceof Error ? error.message : "Action failed");
     }
   }
@@ -248,6 +268,7 @@ export function CampusConnectionCard() {
                               setPassword("");
                             },
                             pick({ tr: "ODTÜ bağlantın kaldırıldı.", en: "Your METU account is disconnected." }),
+                            "campus_disconnected",
                           )
                         }
                       >

@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { useLocale } from "@/components/locale-provider";
+import { resetStudent } from "@/components/posthog-analytics";
 
 export function SignOutButton() {
   const { pick } = useLocale();
@@ -12,6 +13,9 @@ export function SignOutButton() {
   async function signOut() {
     const supabase = createClient();
     await supabase.auth.signOut();
+    // Before the redirect: on a shared machine the next person to sign in
+    // would otherwise inherit this student's identity and their events.
+    resetStudent();
     router.replace("/login");
     router.refresh();
   }
