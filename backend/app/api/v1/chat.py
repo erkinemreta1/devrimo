@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agents import manager
 from app.auth.dependencies import get_current_user
 from app.auth.jwt import AuthenticatedUser
+from app.config import get_settings
 from app.db.models import ChatSession
 from app.db.session import SessionLocal, get_db
 from app.hermes.client import HermesClient, HermesError
@@ -88,7 +89,11 @@ async def chat_completions(
         await manager.release_turn_lock(db, agent, lock_owner)
         raise
 
-    client = HermesClient(manager.endpoint_for(agent), manager.api_key_for(agent))
+    client = HermesClient(
+        manager.endpoint_for(agent),
+        manager.api_key_for(agent),
+        model=get_settings().agent_openai_model,
+    )
     messages = [m.model_dump() for m in body.messages]
     hermes_session_id = chat_session.hermes_session_id or chat_session.id
     chat_session_id = chat_session.id

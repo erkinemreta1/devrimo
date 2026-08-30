@@ -28,6 +28,7 @@ class Settings(BaseSettings):
 
     agent_openai_base_url: str = ""
     agent_openai_api_key: str = ""
+    agent_openai_model: str = "hermes"
 
     secret_encryption_key: str = "change-me-to-a-real-generated-secret"
 

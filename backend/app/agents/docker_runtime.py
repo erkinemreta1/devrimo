@@ -25,6 +25,11 @@ _SEED_SCRIPT = (
     "mkdir -p /opt/data/mcp; "
     "test -f /opt/data/mcp/campus.mcp.json.example || "
     "cp /opt/devrimo/seed/campus.mcp.json.example /opt/data/mcp/campus.mcp.json.example; "
+    "if [ -f /opt/data/config.yaml ] && [ -n \"$OPENAI_MODEL\" ] && "
+    "[ \"$OPENAI_BASE_URL\" = \"https://openrouter.ai/api/v1\" ]; then "
+    "sed -i \"s|^  default:.*|  default: \\\"$OPENAI_MODEL\\\"|; "
+    "s|^  provider:.*|  provider: \\\"openrouter\\\"|\" /opt/data/config.yaml; "
+    "fi; "
     "true"
 )
 
@@ -81,6 +86,8 @@ class DockerAgentRuntime:
             environment["OPENAI_BASE_URL"] = self._settings.agent_openai_base_url
         if self._settings.agent_openai_api_key:
             environment["OPENAI_API_KEY"] = self._settings.agent_openai_api_key
+        if self._settings.agent_openai_model:
+            environment["OPENAI_MODEL"] = self._settings.agent_openai_model
 
         container = self._client.containers.run(
             spec.image,
@@ -96,10 +103,17 @@ class DockerAgentRuntime:
             pids_limit=self._settings.agent_pids_limit,
             security_opt=["no-new-privileges"],
             cap_drop=["ALL"],
+            # Hermes' s6 init must switch users/groups and prepare its
+            # service and writable data directories during startup. Keep only
+            # the capabilities required for those operations.
+            cap_add=["SETUID", "SETGID", "CHOWN", "DAC_OVERRIDE", "FOWNER"],
             tmpfs={"/tmp": "rw,noexec,nosuid,size=256m"},
             command="gateway run",
         )
         self._seed_data_sync(container)
+        # The seed script can update Hermes' persisted model configuration;
+        # restart once so the gateway reloads that configuration.
+        container.restart()
         return container.id
 
     def _seed_data_sync(self, container: Container) -> None:

@@ -21,16 +21,17 @@ class HermesError(Exception):
 
 
 class HermesClient:
-    def __init__(self, base_url: str, api_key: str):
+    def __init__(self, base_url: str, api_key: str, model: str = "hermes"):
         self._base_url = base_url.rstrip("/")
         self._headers = {"Authorization": f"Bearer {api_key}"}
+        self._model = model
 
     async def stream_chat_completions(
         self,
         messages: list[dict[str, str]],
         hermes_session_id: str,
     ) -> AsyncIterator[bytes]:
-        payload = {"model": "hermes", "messages": messages, "stream": True}
+        payload = {"model": self._model, "messages": messages, "stream": True}
         headers = {
             **self._headers,
             "Accept": "text/event-stream",
