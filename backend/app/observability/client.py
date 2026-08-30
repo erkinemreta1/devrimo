@@ -12,10 +12,10 @@ chat turn is worse than no analytics sink.
 mis-configuration looks exactly like a working install. So in debug builds the
 absence of a key is announced once, loudly, at startup.
 
-*Never leak a secret.* ``before_send`` is the last gate every event passes
+*Never leak a secret.* ``before_send`` is the last gate every SDK event passes
 through, and it scrubs credential-shaped values regardless of which call site
-produced them. Prompt and completion content is deliberately allowed through
-(see ``POSTHOG_CAPTURE_CONTENT``); keys, tokens and passwords are not.
+produced them. Prompt, completion, and tool content is deliberately allowed
+through; keys, tokens, and passwords are not.
 """
 
 from __future__ import annotations
@@ -44,14 +44,19 @@ _SECRET_KEY_PATTERN = re.compile(
 )
 # Value shapes that are credentials wherever they appear: bearer headers, JWTs,
 # and PostHog's own personal API keys.
-_SECRET_VALUE_PATTERN = re.compile(r"(Bearer\s+[\w\-.=]+|eyJ[\w\-]{8,}\.[\w\-]{8,}\.[\w\-]+|phx_[A-Za-z0-9]{16,})")
+_SECRET_VALUE_PATTERN = re.compile(
+    r"((?:Bearer|Basic)\s+[\w\-.=]+|eyJ[\w\-]{8,}\.[\w\-]{8,}\.[\w\-]+|ph[cx]_[A-Za-z0-9]{16,}|sk-[A-Za-z0-9_-]{16,})"
+)
 _REDACTED = "[redacted]"
 
 
 def _scrub(value: Any, depth: int = 0) -> Any:
     """Recursively redact credential-shaped keys and values."""
-    if depth > 6:
-        return value
+    # Event payloads are JSON-shaped and therefore acyclic by the time the SDK
+    # accepts them. A generous ceiling avoids pathological recursion without
+    # ever returning an uninspected deep value that could contain a credential.
+    if depth > 20:
+        return _REDACTED
     if isinstance(value, dict):
         return {
             key: (_REDACTED if isinstance(key, str) and _SECRET_KEY_PATTERN.search(key) else _scrub(item, depth + 1))
@@ -67,9 +72,17 @@ def _scrub(value: Any, depth: int = 0) -> Any:
 def _before_send(event: Any) -> Any:
     """Last gate before upload. Must never raise — a throw here drops the queue."""
     try:
-        properties = getattr(event, "properties", None)
+        # posthog-python's before_send contract is a mutable event dictionary,
+        # not an object with a ``properties`` attribute. Keep the small object
+        # fallback for duck-typed callers, but exercise the real dictionary
+        # shape in tests so SDK events cannot bypass redaction unnoticed.
+        properties = event.get("properties") if isinstance(event, dict) else getattr(event, "properties", None)
         if isinstance(properties, dict):
-            event.properties = _scrub(properties)
+            scrubbed = _scrub(properties)
+            if isinstance(event, dict):
+                event["properties"] = scrubbed
+            else:
+                event.properties = scrubbed
     except Exception:  # pragma: no cover - defensive; scrubbing must not break capture
         return event
     return event
@@ -122,11 +135,11 @@ def get_posthog() -> Posthog | None:
         ],
         project_root="/app",
         in_app_modules=["app"],
-        # `privacy_mode` strips $ai_input/$ai_output_choices everywhere; full
-        # capture additionally disables PostHog's own string truncation so long
-        # transcripts and tool results arrive whole.
-        privacy_mode=not settings.posthog_capture_content,
-        enable_full_ai_capture=settings.posthog_capture_content,
+        # Full AI capture is deliberate: prompts, completions, and tool state
+        # are the evidence needed to debug a turn. ``before_send`` still strips
+        # credential-shaped keys and values from every SDK event.
+        privacy_mode=False,
+        enable_full_ai_capture=True,
         capture_trace_context=True,
         before_send=_before_send,
     )

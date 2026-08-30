@@ -132,24 +132,66 @@ def test_tool_failures_are_counted_and_reported(monkeypatch):
 
 
 def test_before_send_redacts_credential_shaped_values():
-    class _Event:
-        properties = {
+    event = {
+        "event": "test_event",
+        "properties": {
             "metu_password": "hunter2",
             "authorization": "Bearer abc.def.ghi",
             "nested": {"access_token": "phx_0123456789abcdef0", "safe": "keep me"},
             "free_text": "token is eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.signature here",
             "messages": [{"role": "user", "content": "Ekle-birak ne zaman?"}],
-        }
+        },
+    }
 
-    event = ph_client._before_send(_Event())
-    assert event.properties["metu_password"] == "[redacted]"
-    assert event.properties["authorization"] == "[redacted]"
-    assert event.properties["nested"]["access_token"] == "[redacted]"
-    assert event.properties["nested"]["safe"] == "keep me"
-    assert "eyJhbGciOiJIUzI1NiJ9" not in event.properties["free_text"]
+    result = ph_client._before_send(event)
+    assert result["properties"]["metu_password"] == "[redacted]"
+    assert result["properties"]["authorization"] == "[redacted]"
+    assert result["properties"]["nested"]["access_token"] == "[redacted]"
+    assert result["properties"]["nested"]["safe"] == "keep me"
+    assert "eyJhbGciOiJIUzI1NiJ9" not in result["properties"]["free_text"]
     # Conversation content is deliberately preserved: full capture is the
     # documented choice for this project.
-    assert event.properties["messages"][0]["content"] == "Ekle-birak ne zaman?"
+    assert result["properties"]["messages"][0]["content"] == "Ekle-birak ne zaman?"
+
+
+def test_otlp_logs_scrub_secrets_but_preserve_content(monkeypatch):
+    from app.observability import logs
+
+    emitted = []
+
+    class _Logger:
+        def emit(self, **record):
+            emitted.append(record)
+
+    monkeypatch.setattr(logs, "_setup", lambda: _Logger())
+    original = {
+        "event": "agent_tool_call_error",
+        "level": "warning",
+        "authorization": "Bearer abc.def.ghi",
+        "detail": "The student's complete tool result",
+    }
+
+    returned = logs.posthog_log_processor(None, "warning", original)
+
+    assert returned is original
+    assert original["authorization"] == "Bearer abc.def.ghi"
+    assert emitted[0]["attributes"]["authorization"] == "[redacted]"
+    assert emitted[0]["attributes"]["detail"] == "The student's complete tool result"
+
+
+def test_tool_span_state_scrubs_secrets_but_preserves_complete_content():
+    from app.agents.scholar.hooks import _span_state
+
+    state = _span_state(
+        {
+            "password": "hunter2",
+            "messages": [{"role": "user", "content": "Show my complete transcript"}],
+        }
+    )
+
+    assert '"password": "[redacted]"' in state
+    assert "hunter2" not in state
+    assert "Show my complete transcript" in state
 
 
 # --- the route wiring -------------------------------------------------------

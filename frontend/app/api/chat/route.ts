@@ -57,7 +57,11 @@ export async function POST(request: Request) {
           } else if (event.type === "tool") {
             writer.write({ type: "data-tool", data: event.tool });
           } else {
+            // Preserve the typed code for product analytics, then emit the AI
+            // SDK's standard error chunk so the runtime actually enters its
+            // error path and the student sees the failure.
             writer.write({ type: "data-stream-error", data: event.error });
+            writer.write({ type: "error", errorText: event.error.message });
           }
         }
       } catch (error) {

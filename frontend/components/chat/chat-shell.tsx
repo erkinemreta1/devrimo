@@ -46,6 +46,7 @@ class ChatTelemetry {
       ) ?? 0;
       const attachmentCount = latestMessage?.parts.filter((part) => part.type === "file").length ?? 0;
       this.requestStartedAt = Date.now();
+      this.streamError = null;
       captureProductEvent("chat_message_sent", {
         conversation_type: id ? "existing" : "new",
         message_position: messages.length,
@@ -93,7 +94,11 @@ function AssistantThread({
     messages: initialMessages,
     transport: telemetry.transport,
     onThreadIdChange: onThreadReady,
-    onFinish: () => {
+    onFinish: ({ isError }) => {
+      // AI SDK invokes onFinish for both success and failure. Error analytics
+      // are emitted by onError, so counting this as completed would corrupt
+      // the completion-rate denominator.
+      if (isError) return;
       captureProductEvent("chat_response_completed", {
         duration_seconds: telemetry.finishDuration() ?? 0,
       });

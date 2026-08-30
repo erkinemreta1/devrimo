@@ -98,8 +98,10 @@ def _defaults(kwargs: dict[str, Any]) -> dict[str, Any]:
         # An explicit caller value always wins over the ambient one.
         kwargs["posthog_properties"] = {**merged, **(kwargs.get("posthog_properties") or {})}
 
-    if not kwargs.get("posthog_privacy_mode"):
-        kwargs["posthog_privacy_mode"] = not settings.posthog_capture_content
+    # This project deliberately captures complete prompts and completions.
+    # The client-level before_send hook removes credentials without discarding
+    # the conversational content needed to investigate a bad turn.
+    kwargs["posthog_privacy_mode"] = False
 
     if kwargs.get("posthog_provider_override") is None:
         # Reported as $ai_provider so cost attribution does not claim these

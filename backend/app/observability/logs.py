@@ -19,6 +19,7 @@ import logging
 from typing import Any
 
 from app.config import get_settings
+from app.observability.client import _scrub
 from app.observability.llm import current_trace_id
 
 # Structlog level names -> OTel severity. OTel wants both a number and a text.
@@ -92,14 +93,21 @@ def posthog_log_processor(_logger: Any, _method: str, event_dict: dict[str, Any]
         return event_dict
 
     try:
-        from opentelemetry.sdk._logs import LogRecord
+        from opentelemetry._logs import SeverityNumber
 
-        level = str(event_dict.get("level", "info")).lower()
+        # OTLP bypasses the PostHog SDK and therefore its before_send hook.
+        # Apply the same secret-only scrubber here while leaving the dictionary
+        # returned to structlog untouched, so local stdout remains byte-identical.
+        safe_event = _scrub(event_dict)
+        if not isinstance(safe_event, dict):  # pragma: no cover - event_dict is typed as a dict
+            return event_dict
+
+        level = str(safe_event.get("level", "info")).lower()
         number, text = _SEVERITY.get(level, (9, "INFO"))
 
         attributes = {
             key: value
-            for key, value in event_dict.items()
+            for key, value in safe_event.items()
             if key not in ("event", "level", "timestamp") and isinstance(value, (str, int, float, bool))
         }
         # Links this log line to the AI trace it happened inside, so a failed
@@ -107,17 +115,15 @@ def posthog_log_processor(_logger: Any, _method: str, event_dict: dict[str, Any]
         trace_id = current_trace_id.get()
         if trace_id:
             attributes["$ai_trace_id"] = trace_id
-        if "user_id" in event_dict:
+        if "user_id" in safe_event:
             # PostHog links logs to a person through this property name.
-            attributes["distinct_id"] = str(event_dict["user_id"])
+            attributes["distinct_id"] = str(safe_event["user_id"])
 
         otel_logger.emit(
-            LogRecord(
-                body=str(event_dict.get("event", "")),
-                severity_number=number,
-                severity_text=text,
-                attributes=attributes,
-            )
+            body=str(safe_event.get("event", "")),
+            severity_number=SeverityNumber(number),
+            severity_text=text,
+            attributes=attributes,
         )
     except Exception:  # pragma: no cover - a log sink must never break a log call
         pass

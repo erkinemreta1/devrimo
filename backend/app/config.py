@@ -59,10 +59,6 @@ class Settings(BaseSettings):
     # round trip per flag check on the chat hot path.
     posthog_personal_api_key: str = ""  # phx_...
     posthog_enabled: bool = True
-    # Whether $ai_input / $ai_output_choices carry real prompt and completion
-    # text. Turning this off downgrades AI observability to metadata only
-    # without touching any call site.
-    posthog_capture_content: bool = True
     posthog_debug: bool = False
     # The model is served from an OpenAI-compatible endpoint PostHog has no
     # price table for, so cost is reported from these instead of inferred.

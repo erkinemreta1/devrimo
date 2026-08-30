@@ -24,6 +24,7 @@ from app.db.models import AgentToolAudit
 from app.db.session import SessionLocal
 from app.logging import get_logger
 from app.observability import capture, capture_exception
+from app.observability.client import _scrub
 from app.observability.llm import current_session_id, current_trace_id
 
 logger = get_logger(__name__)
@@ -119,9 +120,12 @@ def _tool_server(tool_name: str) -> str | None:
 
 
 def _span_state(value: Any) -> Any:
-    """Bound a span payload without hiding that it was bounded."""
+    """Secret-scrub and bound a span payload without hiding that it was bounded."""
     try:
-        serialized = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
+        safe_value = _scrub(value)
+        serialized = (
+            safe_value if isinstance(safe_value, str) else json.dumps(safe_value, ensure_ascii=False, default=str)
+        )
     except Exception:
         return "[unserializable]"
     if len(serialized) > MAX_SPAN_STATE_CHARS:
