@@ -153,7 +153,10 @@ class AgentToolAudit(Base):
     __table_args__ = (Index("ix_agent_tool_audit_user_created", "user_id", "created_at"),)
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    user_id: Mapped[uuid.UUID] = mapped_column(index=True, nullable=False)
+    # No separate index here: this table is insert-heavy and
+    # ``ix_agent_tool_audit_user_created`` already serves user_id-only lookups
+    # on its leading column, so a second one would only cost write amplification.
+    user_id: Mapped[uuid.UUID] = mapped_column(nullable=False)
     session_id: Mapped[str] = mapped_column(String(255), nullable=False)
     run_id: Mapped[str] = mapped_column(String(255), nullable=False)
     tool_name: Mapped[str] = mapped_column(String(128), nullable=False)

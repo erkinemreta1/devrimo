@@ -32,13 +32,14 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index("ix_agent_tool_audit_user_id", "agent_tool_audit", ["user_id"])
+    # Only the composite index. Audit rows are written on every external
+    # mutation and read back by user, and a standalone user_id index would be
+    # a redundant leading-column prefix of this one.
     op.create_index("ix_agent_tool_audit_user_created", "agent_tool_audit", ["user_id", "created_at"])
 
 
 def downgrade() -> None:
     op.drop_index("ix_agent_tool_audit_user_created", table_name="agent_tool_audit")
-    op.drop_index("ix_agent_tool_audit_user_id", table_name="agent_tool_audit")
     op.drop_table("agent_tool_audit")
     with op.batch_alter_table("campus_credentials") as batch:
         batch.drop_column("credential_revision")

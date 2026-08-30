@@ -166,6 +166,13 @@ content. Event storage is off by default. Trace retention and database access
 still need to be enforced by deployment policy; redaction is not a substitute
 for retention limits.
 
+When writing that policy, note **where** the conversations actually are. On
+Postgres, Agno's `PostgresDb` keeps its `agno_*` tables in its own `ai` schema,
+while Alembic owns `public` — one database, two schemas. Students' messages,
+runs, and any traces are all in `ai`, so a retention job or a grant audit
+scoped to `public` covers none of them. On SQLite there is a single namespace
+and the `agno_` prefix is the only separation.
+
 ### AgentOS and measurement
 
 AgentOS runs in a separate process against the same Agno tables. It deliberately
@@ -203,9 +210,20 @@ Point the frontend's `NEXT_PUBLIC_API_URL` at `http://localhost:8000`.
 
 ```bash
 cp .env.example .env   # Scholar + real Supabase/model/AgentOS verification settings
-alembic upgrade head
 docker compose up --build
 ```
+
+Do **not** run `alembic upgrade head` on the host for this path. The broker's
+`CMD` runs it inside the container, against the compose Postgres, before
+uvicorn starts. A host-side run would not reach that database anyway — the
+`postgres` service publishes no port — so it would quietly migrate whatever
+`DATABASE_URL` your `.env` names, which for a freshly copied `.env.example` is
+the local SQLite file.
+
+`agentos` overrides that `CMD`, so it does not migrate; it starts against
+whatever schema the broker has already applied. Compose starts the two as soon
+as Postgres is healthy, so on a first `up` AgentOS can briefly precede the
+broker's migration and restart until the tables exist.
 
 The broker image builds the four campus MCP servers into `/opt/mcp`, each in
 its own virtualenv (their upstream pins don't co-resolve — one needs `fastmcp`,
@@ -294,4 +312,14 @@ finish, but no later turn can reuse the old credentials.
   against the real servers.
 - **Model-specific quality targets.** The harness and gates exist, but release
   scores depend on the configured production model and must be recorded after
-  repeated runs. Unit tests cannot certify answer quality or latency.
+  repeated runs. Unit tests cannot certify answer quality or latency. The suite
+  builds its cases without a model, but no scored run has been recorded.
+
+The Postgres path itself is no longer on this list. The four migrations apply,
+downgrade, and re-apply cleanly on Postgres 16 as well as SQLite, `alembic`
+autogenerate reports no drift against `app/db/models.py` on either, and a
+Scholar turn under `AGENT_RUNTIME=fake` has been driven end to end against
+Postgres — provision, SSE stream, persistence, session continuity, history
+read-back — with Agno's tables created through the sync `psycopg` URL. What
+that does *not* cover is the same path with a real model or real campus
+servers, which is what the first two entries above are about.

@@ -140,7 +140,7 @@ async def test_confirmation_pauses_before_email_and_audits_only_after_approval()
     requirement.confirm()
     completed = await agent.acontinue_run(paused, requirements=paused.requirements)
     assert completed.content == "sent after approval"
-    assert calls == ["student@example.edu"], response.text
+    assert calls == ["student@example.edu"]
 
     async with SessionLocal() as db:
         rows = (await db.execute(select(AgentToolAudit))).scalars().all()

@@ -23,6 +23,12 @@ logger = get_logger(__name__)
 
 # Prefixed so Agno's tables are obviously not hand-written app tables when
 # someone opens the schema, and so they can't collide with `chat_sessions`.
+#
+# Note that on Postgres these do not land beside the app's tables: `PostgresDb`
+# defaults to its own `ai` schema, while Alembic owns `public`. Same database,
+# two schemas — retention and backup policy has to name `ai` explicitly or it
+# will miss every conversation. On SQLite there is one namespace and the
+# prefix is the only separation.
 _SESSION_TABLE = "agno_sessions"
 _RUNS_TABLE = "agno_runs"
 _MEMORY_TABLE = "agno_memories"
