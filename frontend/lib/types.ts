@@ -9,8 +9,6 @@ export type Agent = {
   id: string;
   user_id?: string;
   status: AgentStatus;
-  host_port?: number | null;
-  hermes_image_tag?: string | null;
   created_at?: string;
   updated_at?: string;
   error_detail?: string | null;

@@ -1,12 +1,12 @@
 """The registry of campus MCP servers that can be attached to a user's agent.
 
-Each entry describes one Model Context Protocol server that is vendored into
-the ``devrimo/hermes`` image (see ``images/hermes/``) and launched *inside*
-that user's own container over stdio. Running them in-container rather than
-as shared HTTP services is deliberate: three of the four upstream servers are
-single-tenant and read their credentials from process environment, and the
-per-user container is already this system's isolation boundary. One student's
-METU password never enters another student's process.
+Each entry describes one Model Context Protocol server that the broker
+launches over stdio as a subprocess, once per student who enabled it. Running
+them per-student rather than as shared HTTP services is deliberate: three of
+the four upstream servers are single-tenant and read their credentials from
+process environment, so a shared deployment would put every student's METU
+password in one process. Here each subprocess is spawned with only its own
+student's credentials — see :mod:`app.campus.mcp_config`.
 
 ``env_template`` values are rendered by :mod:`app.campus.mcp_config` against a
 :class:`~app.campus.credentials.CampusSecrets` bundle. Keys whose value renders
@@ -34,20 +34,26 @@ class CampusTool:
     scope_en: str
     scope_tr: str
     requires: tuple[CredentialKind, ...]
-    command: str
+    # The virtualenv this server is launched from, as a directory name under
+    # ``campus_mcp_root``. A slug rather than an absolute path so the install
+    # location is deployment policy (app/config.py), not catalog data.
+    venv_slug: str
     args: tuple[str, ...]
     env_template: dict[str, str] = field(default_factory=dict)
-    # Working directory inside the container. Servers that cache session
-    # tokens relative to CWD need this to point at the writable data volume.
-    cwd: str | None = None
+    # Set when the server writes relative to its CWD. Renders to a private
+    # per-user directory under ``campus_state_root`` so two students never
+    # share a cache. ``None`` means the server needs no writable directory.
+    state_slug: str | None = None
+    # Tools to withhold from the model even when the server is enabled. This is
+    # how a server that can both read and act is offered read-only.
+    exclude_tools: tuple[str, ...] = ()
     default_enabled: bool = True
 
 
-# Every server is installed into its own virtualenv under /opt/mcp by the
-# image build, so each one gets an interpreter with only its own dependency
-# tree — upstream pins conflict (mcp vs fastmcp, pydantic ranges) and a single
-# shared site-packages would make the set unresolvable.
-_VENV = "/opt/mcp/{slug}/.venv/bin/python"
+# Every server is installed into its own virtualenv under ``campus_mcp_root``
+# by the image build, so each one gets an interpreter with only its own
+# dependency tree — upstream pins conflict (mcp vs fastmcp, pydantic ranges)
+# and a single shared site-packages would make the set unresolvable.
 
 CAMPUS_TOOLS: tuple[CampusTool, ...] = (
     CampusTool(
@@ -59,14 +65,14 @@ CAMPUS_TOOLS: tuple[CampusTool, ...] = (
         scope_en="Reads your student record from student.metu.edu.tr. Read-only.",
         scope_tr="student.metu.edu.tr üzerindeki öğrenci kaydını okur. Salt okunur.",
         requires=("metu_password",),
-        command=_VENV.format(slug="sais"),
+        venv_slug="sais",
         args=("-m", "sais_mcp.server", "--transport", "stdio"),
         env_template={
             "SAIS_USERNAME": "{metu_username}",
             "SAIS_PASSWORD": "{metu_password}",
             "LOCALE": "{locale}",
         },
-        cwd="/opt/data/mcp/sais",
+        state_slug="sais",
     ),
     CampusTool(
         id="course_info",
@@ -77,14 +83,14 @@ CAMPUS_TOOLS: tuple[CampusTool, ...] = (
         scope_en="Reads the METU course catalog and your curriculum requirements. Read-only.",
         scope_tr="ODTÜ ders kataloğunu ve müfredat gereksinimlerini okur. Salt okunur.",
         requires=("metu_password",),
-        command=_VENV.format(slug="course-info"),
+        venv_slug="course-info",
         args=("-m", "metu_course_info_mcp", "--transport", "stdio"),
         env_template={
             "SAIS_USERNAME": "{metu_username}",
             "SAIS_PASSWORD": "{metu_password}",
             "LOCALE": "{locale}",
         },
-        cwd="/opt/data/mcp/course-info",
+        state_slug="course-info",
     ),
     CampusTool(
         id="odtuclass",
@@ -95,8 +101,8 @@ CAMPUS_TOOLS: tuple[CampusTool, ...] = (
         scope_en="Reads your ODTÜClass courses and deadlines. Read-only.",
         scope_tr="ODTÜClass derslerini ve teslim tarihlerini okur. Salt okunur.",
         requires=("odtuclass",),
-        command=_VENV.format(slug="odtuclass"),
-        args=("/opt/mcp/odtuclass/odtuclass_mcp.py",),
+        venv_slug="odtuclass",
+        args=("{venv_root}/odtuclass_mcp.py",),
         env_template={
             "ODTUCLASS_USERNAME": "{metu_username}",
             "ODTUCLASS_PASSWORD": "{metu_password}",
@@ -106,7 +112,7 @@ CAMPUS_TOOLS: tuple[CampusTool, ...] = (
         # The upstream client caches its Moodle session token under
         # ``os.getcwd()/.odtuclass_cache`` and writes downloads next to it, so
         # its CWD has to be on the writable per-user volume.
-        cwd="/opt/data/mcp/odtuclass",
+        state_slug="odtuclass",
     ),
     CampusTool(
         id="webmail",
@@ -123,14 +129,14 @@ CAMPUS_TOOLS: tuple[CampusTool, ...] = (
             "Senin adına işlem yapabilen tek kampüs aracı budur."
         ),
         requires=("metu_password",),
-        command=_VENV.format(slug="webmail"),
+        venv_slug="webmail",
         args=("-m", "metu_webmail_mcp", "--transport", "stdio"),
         env_template={
             "METU_USERNAME": "{metu_username}",
             "METU_PASSWORD": "{metu_password}",
             "LOCALE": "{locale}",
         },
-        cwd="/opt/data/mcp/webmail",
+        state_slug="webmail",
         # Opt-in: it can send mail as the student, so it should be a decision
         # they make rather than a default they discover afterwards.
         default_enabled=False,

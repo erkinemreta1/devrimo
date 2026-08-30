@@ -50,7 +50,9 @@ export async function* streamChatCompletions(
       Authorization: `Bearer ${token}`,
     },
     body: JSON.stringify({
-      model: request.model ?? "hermes",
+      // The broker picks the model from AGENT_MODEL; this is only a label
+      // echoed back on each chunk.
+      model: request.model ?? "devrimo",
       messages: request.messages.map(({ role, content }) => ({ role, content })),
       session_id: request.client_id,
       stream: true,

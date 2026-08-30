@@ -17,20 +17,21 @@ class AgentStatus(enum.StrEnum):
 
 
 class Agent(Base):
+    """A user's entitlement to an agent, plus its last known health.
+
+    Carries no container identity any more: the agent is built in-process on
+    demand (see :mod:`app.agents.pool`) and its conversation history lives in
+    the Agno tables, so there is nothing here that has to survive a restart
+    except the row itself.
+    """
+
     __tablename__ = "agents"
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(unique=True, index=True, nullable=False)
     status: Mapped[AgentStatus] = mapped_column(
-        Enum(AgentStatus, native_enum=False, length=32), default=AgentStatus.provisioning, nullable=False
+        Enum(AgentStatus, native_enum=False, length=32), default=AgentStatus.running, nullable=False
     )
-    host_port: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    hermes_image_tag: Mapped[str] = mapped_column(String(255), nullable=False)
-
-    container_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    container_name: Mapped[str] = mapped_column(String(255), nullable=False)
-    volume_name: Mapped[str] = mapped_column(String(255), nullable=False)
-    api_key_enc: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
 
     last_active_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -52,7 +53,9 @@ class ChatSession(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(index=True, nullable=False)
     agent_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("agents.id"), nullable=False)
 
-    hermes_session_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Agno's own session key. Kept distinct from ``id`` (which the client
+    # mints) so the two can diverge without a migration.
+    agno_session_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     title: Mapped[str | None] = mapped_column(String(500), nullable=True)
     message_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
@@ -103,7 +106,9 @@ class CampusCredential(Base):
 
     These exist because the campus MCP servers authenticate to METU as the
     student — there is no delegated-token flow at student.metu.edu.tr to use
-    instead. The password is Fernet-encrypted with ``SECRET_ENCRYPTION_KEY``
+    instead. Each server is spawned with only its own entry's credentials in
+    its process environment; see :mod:`app.campus.mcp_config`. The password is
+    Fernet-encrypted with ``SECRET_ENCRYPTION_KEY``
     (see ``app/core/crypto.py``), is decrypted only in
     ``app/campus/credentials.py``, and is never included in any response
     schema.
@@ -126,9 +131,9 @@ class CampusCredential(Base):
 
     verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     verification_error: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # Set when the credentials change, cleared once the agent container has
-    # been recreated with the new MCP config. Lets the UI say "restart to
-    # apply" instead of silently serving a stale toolset.
+    # Set when the credentials change, cleared once the resident agent has
+    # been rebuilt with the new toolset. Lets the UI say "restart to apply"
+    # instead of silently serving a stale toolset.
     config_dirty: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

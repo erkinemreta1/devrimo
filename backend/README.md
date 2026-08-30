@@ -1,10 +1,9 @@
 # Devrimo Agent Broker
 
-A FastAPI backend that gives every authenticated user a private, persistent
-[Hermes](https://github.com/nousresearch/hermes-agent) agent in its own
-Docker container, and proxies chat + history between the
-[`frontend/`](../frontend) app and that container. See the design writeup
-this implements for the full architecture rationale.
+A FastAPI backend that gives every authenticated user a private
+[Agno](https://github.com/agno-agi/agno) agent with access to their METU
+campus systems, and serves chat + history to the [`frontend/`](../frontend)
+app.
 
 The API surface (`/api/v1/...`) is fixed by `frontend/lib/api/*.ts` and
 `frontend/lib/types.ts` — this backend exists to satisfy that contract, not
@@ -14,35 +13,126 @@ the other way around.
 
 ```
 app/
-  main.py              FastAPI app, CORS, lifespan (starts the reconciler)
-  config.py             Settings, read from env / .env
-  auth/                 Supabase JWT verification (JWKS + legacy HS256)
-  db/                    SQLAlchemy models (Agent, ChatSession) + session
+  main.py               FastAPI app, CORS, lifespan (reconciler + pool teardown)
+  config.py              Settings, read from env / .env
+  auth/                  Supabase JWT verification (JWKS + legacy HS256)
+  db/                     SQLAlchemy models (Agent, ChatSession) + session
   agents/
-    runtime.py           AgentRuntime protocol — the only seam that matters
-    docker_runtime.py     The only module allowed to import the Docker SDK
-    fake_runtime.py       In-memory runtime for dev/tests without a daemon
-    manager.py            State machine, turn locks, provisioning
-    reconciler.py         Idle reaping, crash healing, background loop
-  hermes/client.py       Typed client for one user's Hermes container
+    pool.py               Resident agents, one per user, with their MCP subprocesses
+    toolset.py            The only module that spawns campus MCP servers
+    store.py              The Agno database — where conversation history lives
+    manager.py            State machine, turn locks, entitlement
+    reconciler.py         Idle eviction, background loop
+    echo_model.py         Model test double for AGENT_RUNTIME=fake
+    persona.md            The agent's instructions
   campus/
-    catalog.py           The four METU MCP servers, and what each one needs
-    mcp_config.py        Renders one student's mcp_servers block (pure function)
-    credentials.py       The only module that decrypts a METU password
-    verify.py            One SSO sign-in, to check credentials before storing
-    service.py           Profile + credential persistence
+    catalog.py            The four METU MCP servers, and what each one needs
+    mcp_config.py         Renders one student's launch specs (pure function)
+    credentials.py        The only module that decrypts a METU password
+    verify.py             One SSO sign-in, to check credentials before storing
+    service.py            Profile + credential persistence
   api/v1/                 Routes: agents, campus, chat, profile, sessions, health
   schemas.py              Response shapes, kept in lockstep with the frontend
-images/hermes/           The devrimo/hermes image (SOUL.md, vendored MCPs)
-  bin/apply-campus-mcp.py  Merges the broker's servers into Hermes' config.yaml
-  CAMPUS-MCP.md            How the four servers are wired, and how to smoke-test
 alembic/                  Schema migrations
-tests/                    Full API test suite against the fake runtime
+tests/                    Full API test suite against the echo model
 ```
+
+## Architecture
+
+The agent runs **in the broker process**, not in a container of its own.
+`app/agents/pool.py` holds one live `agno.Agent` per active user; building one
+spawns a campus MCP subprocess per connected server and costs about a second,
+so agents are created on the turn that needs them and evicted once idle.
+
+Eviction is safe because it is invisible: conversation history lives in the
+database (`agno_*` tables, see `app/agents/store.py`), so reading a month-old
+thread is a query and the next turn after an eviction transparently rebuilds.
+
+`chat.py` owns the wire format rather than proxying one. It translates Agno's
+run events into OpenAI `chat.completion.chunk` objects, which is what
+`frontend/lib/api/chat.ts` parses. Tool activity is emitted on the same stream
+as chunks carrying an empty delta plus a namespaced `devrimo` object — today's
+frontend ignores them, and the assistant-ui tool components can be wired to
+them without a backend change.
+
+### Isolation
+
+Campus MCP servers are subprocesses of the broker, spawned one set per student.
+The isolation that used to come from one container per student now comes from
+process environment: the MCP SDK spawns each server with only
+`HOME/LOGNAME/PATH/SHELL/TERM/USER` inherited plus that server's own rendered
+`env`, so a campus server sees its own student's METU password and neither
+another student's nor the broker's `SECRET_ENCRYPTION_KEY`, `DATABASE_URL`, or
+model-provider key.
+
+This is a real reduction in isolation from the container design, taken
+deliberately: all four upstream servers are first-party, and the broker already
+decrypts every student's password. The residual risk is a bug in one of those
+scrapers reading another student's environment. Two things follow from that and
+should not be dropped:
+
+- **The MCP server refs are pinned** to exact commits (Dockerfile build args),
+  and the build records what each one resolved to in `/opt/mcp/MANIFEST`,
+  reported by `GET /health`. Pinning buys reproducibility, not review — nobody
+  has audited those commits, and pinning is what makes auditing them worth
+  doing. Bumping one is `git ls-remote <repo> <branch>`, edit the arg, rebuild.
+- **Webmail grants more authority than its consent copy claims.** The pinned
+  commit exposes six mutating tools, including `forward_email` and a
+  `delete_email` whose non-permanent mode can still destroy mail; the onboarding
+  text promises only read and send. Nothing but the system prompt stands between
+  a hostile course announcement and a forwarded transcript. This is the largest
+  remaining exposure, and it is a tool-layer problem rather than a network one —
+  see [Decision: webmail write authority](../docs/decisions/0001-webmail-write-authority.md),
+  which is open and should be closed before webmail reaches students.
+
+Restoring full per-student isolation later does not require undoing this work:
+run the four servers behind Streamable HTTP in a per-student sandbox and point
+`MCPTools` at the URL instead of a `StdioServerParameters`. `app/agents/toolset.py`
+is the only module that would change.
+
+### Egress
+
+There is no egress allowlist, and the note that used to say one "moved to the
+broker" was wrong. The reasoning is worth keeping, because the obvious fix does
+not work here.
+
+An allowlist expressible in `docker-compose.yml` means an HTTP proxy, and an
+HTTP proxy cannot filter this traffic:
+
+- **Webmail is not HTTP.** It is IMAP and SMTP over raw TCP (993/465), and
+  `imaplib`/`smtplib` are not proxy-aware. A proxy would cover three servers and
+  silently miss the only one that can act as the student.
+- **Proxy environment never reaches the other three.** The MCP SDK spawns each
+  server with `DEFAULT_INHERITED_ENV_VARS` only — `HOME`, `LOGNAME`, `PATH`,
+  `SHELL`, `TERM`, `USER`. An `HTTPS_PROXY` set in compose is dropped before the
+  subprocess starts. Making it work would mean injecting it per-spec in
+  `app/campus/mcp_config.py`, i.e. a network control whose enforcement depends
+  on application code opting in.
+
+Filtering this mix means L4, and the broker cannot do it to itself: `nftables`
+needs `NET_ADMIN`, which hands back the privilege that dropping the Docker
+socket removed. It belongs on the host — an nftables rule on the FORWARD chain
+for the `devrimo-internal` bridge, allowing METU hosts and the model endpoint.
+Worth doing as defence in depth; deployment configuration, not something this
+repo can ship.
+
+Be clear about what it would buy, though. The worst exfiltration path is *inside*
+any such allowlist: webmail can send mail as the student, to anywhere, and mail
+to METU hosts is exactly what the allowlist permits. Network filtering does not
+touch that. The control that does is at the tool layer — see the webmail
+decision linked above.
+
+### Telemetry
+
+Agno posts run telemetry to `os-api.agno.com` by default. These runs are
+students' campus conversations, so it is switched off in code (`telemetry=False`
+in `pool.py`) and again via `AGNO_TELEMETRY=false` in the compose file and
+`.env.example`. Both, deliberately — a deployment that forgets the env var is
+still covered.
 
 ## Running it
 
-### Local dev (no Docker daemon needed)
+### Local dev (no campus servers needed)
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
@@ -52,24 +142,23 @@ alembic upgrade head
 AGENT_RUNTIME=fake uvicorn app.main:app --reload
 ```
 
-`AGENT_RUNTIME=fake` swaps in an in-memory runtime so you can exercise the
-whole agent lifecycle and chat flow against the real frontend without a
-Docker daemon or a real Hermes container. Point the frontend's
-`NEXT_PUBLIC_API_URL` at `http://localhost:8000`.
+`AGENT_RUNTIME=fake` swaps in an echo model (`app/agents/echo_model.py`) so the
+whole chat and session flow works against the real frontend without a model
+provider or the four campus servers installed. Everything else — the Agent, its
+database, session persistence, SSE serialization — is the production path.
+Point the frontend's `NEXT_PUBLIC_API_URL` at `http://localhost:8000`.
 
-### Full stack (real containers)
+### Full stack
 
 ```bash
-docker build -t devrimo/hermes:latest ./images/hermes
-cp .env.example .env   # AGENT_RUNTIME=docker, real SUPABASE_URL, etc.
+cp .env.example .env   # AGENT_RUNTIME=agno, real SUPABASE_URL, AGENT_OPENAI_API_KEY
 docker compose up --build
 ```
 
-This starts Postgres, the broker, and creates the `devrimo-agents` network
-that per-user Hermes containers join. The broker needs the host's Docker
-socket to create/manage those containers — see the comment in
-`docker-compose.yml` about scoping that down with a socket proxy before
-this goes anywhere near production.
+The broker image builds the four campus MCP servers into `/opt/mcp`, each in
+its own virtualenv (their upstream pins don't co-resolve — one needs `fastmcp`,
+the others pin `mcp` directly). There is no second image and no Docker socket
+mount any more, so the broker runs as an unprivileged user.
 
 ### Tests
 
@@ -78,39 +167,17 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
-Tests run against `AGENT_RUNTIME=fake` and a throwaway sqlite database — no
-Docker daemon or live Hermes container required. `HermesClient` is stubbed
-per-test so the chat/session endpoints are exercised without real HTTP
-calls.
+## Dependency pins worth knowing
 
-## What's genuinely unverified
-
-This was built against Hermes's published docs, not a running instance —
-there was no way to pull `nousresearch/hermes-agent` and test against it in
-this environment. Worth confirming against a real container before relying on:
-
-- **A full chat turn that actually calls a campus tool.** The servers are
-  confirmed to launch and advertise their tools (`hermes mcp add` probed
-  `sais` and discovered all six), and the config schema is confirmed against
-  the real image — but no end-to-end turn has driven a tool call through the
-  model and back.
-- **`images/hermes/CAMPUS-MCP.md` documents the smoke test** for re-checking a
-  server after bumping its pinned ref.
-
-- **Session adoption.** `chat.py` sends the client's thread id straight
-  through as `X-Hermes-Session-Id`, assuming Hermes adopts an id it hasn't
-  seen before. If it doesn't, the first turn of a thread needs
-  `POST /api/sessions` first. The `chat_sessions.hermes_session_id` column
-  already exists separately from the client id specifically so this can
-  change without a schema migration.
-- **`/api/sessions/{id}/messages` response shape.** `hermes/client.py`
-  accepts either a bare list or `{"messages": [...]}`, and reads
-  `role`/`content`/`created_at` per item with a couple of fallback key
-  names. Worth pinning down with a real response and a fixture.
+- **`mcp<2.0` is deliberate.** 2.x renamed `McpError` to `MCPError` and agno 3.x
+  still imports the old name; an unpinned install fails at import with a
+  misleading "`mcp` not installed".
+- **`psycopg` alongside `asyncpg`.** Agno's database layer is synchronous and
+  builds its own engine, so Postgres deployments need both drivers.
+- **`AGENT_MAX_TOKENS`.** Agno's `OpenRouter` class defaults `max_tokens` to
+  1024, which truncates a long transcript summary mid-sentence.
 
 ## Campus MCP tools
-
-Four real MCP servers give the agent access to METU systems:
 
 | id | Server | What it reaches |
 |---|---|---|
@@ -119,28 +186,17 @@ Four real MCP servers give the agent access to METU systems:
 | `odtuclass` | [metu-odtuclass-mcp](https://github.com/erkinemreta1/metu-odtuclass-mcp) | Enrolled courses, announcements, syllabi, assignment deadlines |
 | `webmail` | [metu-webmail-mcp](https://github.com/atesahmet0/metu-webmail-mcp) | Read/search/send mail on the student's `@metu.edu.tr` account |
 
-### How they run
+`app/campus/mcp_config.py` renders each student's launch specs — command, argv,
+environment, working directory — and `app/agents/toolset.py` turns them into
+connected `MCPTools`. Each server gets `tool_name_prefix` (the four were written
+independently and several use generic tool names) and a private 0700 working
+directory under `CAMPUS_STATE_ROOT`, because odtuclass caches its Moodle session
+token relative to its CWD.
 
-All four are baked into the `devrimo/hermes` image at build time, each in its
-own virtualenv under `/opt/mcp` (their upstream pins don't co-resolve — one
-needs `fastmcp`, the others pin `mcp` directly). They are launched **inside
-each student's own container** over stdio, not as shared HTTP services.
-
-That choice is the whole security design. Three of the four upstream servers
-are single-tenant and read credentials from process environment, and the
-per-user container is already this system's isolation boundary — so one
-student's METU password is only ever in one student's container. A shared
-multi-tenant deployment would put every student's credentials in one process.
-
-Hermes reads MCP servers from `$HERMES_HOME/config.yaml` under `mcp_servers`
-(`/opt/data/config.yaml` in this image) — confirmed by running `hermes mcp add`
-against the real image and reading back what it wrote.
-`app/campus/mcp_config.py` renders that mapping, `docker_runtime.py` uploads it
-as a tar stream (not an `exec` command line, which is visible to anything that
-can inspect the daemon) at mode 0600, and `images/hermes/bin/apply-campus-mcp.py`
-merges it in with `ruamel.yaml` — preserving Hermes' comments, unrelated keys,
-and any server the student added with `hermes mcp add` — then deletes the
-staged file. See `images/hermes/CAMPUS-MCP.md`.
+A server that fails to connect is dropped and logged rather than failing the
+whole agent; the persona tells the model to say plainly when a tool it expected
+is missing. Note that `MCPTools.connect()` swallows its own exceptions, so
+`toolset.py` checks whether the toolkit actually initialized.
 
 ### Credentials
 
@@ -153,38 +209,28 @@ authenticate as the student with their real METU password. Consequently:
 - It is stored Fernet-encrypted under `SECRET_ENCRYPTION_KEY`, decrypted only
   in `app/campus/credentials.py`, and is in **no** response schema — the API
   reports `has_password: true`, never the value.
-- Disconnecting from Settings deletes it and rebuilds the container without it.
+- Disconnecting from Settings deletes it and drops the resident agent.
 
 `webmail` is the only server that can act rather than read, so it is opt-in
-(`default_enabled=False`) and flagged as such in the onboarding UI.
+(`default_enabled=False`) and flagged as such in the onboarding UI. `CampusTool`
+also carries an `exclude_tools` field, which would let webmail be offered
+read-only rather than all-or-nothing — not currently used.
 
 ### Changing a connection
 
-Credentials live in the config file's per-server `env`, not in container
-environment, so applying a change rewrites that file and restarts the gateway
-(`AgentRuntime.reconfigure`) — the container and its volume survive.
+Credentials are read fresh on every turn and compared against what the resident
+agent was built with, so a change takes effect on the next turn without a
+restart. `PUT /campus/connection` also drops the resident agent eagerly, so a
+student who revokes a tool stops having it immediately rather than at the end of
+their current session.
 
-`PUT /campus/connection` does this eagerly when the agent is running. When it
-isn't — or when the eager push fails — `campus_credentials.config_dirty` stays
-set, and the config is pushed on the next `manager.start`, or on demand via
-`POST /campus/apply`. Without that, an agent stopped by the idle reaper would
-come back running the toolset it was originally created with.
+## What's genuinely unverified
 
-## Security notes
-
-- Agent containers run with `cap-drop: ALL`, `no-new-privileges`, memory/CPU/PID
-  limits, and no published ports — see `docker_runtime.py`.
-- Per-user `API_SERVER_KEY`s are generated at provision time and stored
-  encrypted (Fernet, keyed by `SECRET_ENCRYPTION_KEY`) — never returned to
-  the frontend. Students' METU passwords use the same key and the same rule.
-- `SECRET_ENCRYPTION_KEY` now protects real user passwords, not just internal
-  API keys. It should be a managed secret, and rotating it needs a
-  re-encryption pass — otherwise every campus connection breaks at once.
-- The broker holds plaintext METU passwords in memory only while rendering a
-  container's MCP config. They are not logged (see `verify.py`, which never
-  logs its request payload) and `CampusSecrets.__repr__` is overridden so an
-  accidental interpolation can't print one.
-- The `devrimo-agents` Docker network currently allows outbound internet
-  (agents need it to reach the model provider) but has no route to
-  Postgres or the broker's internal endpoints. Tightening outbound to an
-  allowlisted egress proxy is the next hardening step, not yet built.
+- **A full chat turn that actually calls a campus tool.** The spec renderer and
+  the toolkit wiring are covered by tests, but no end-to-end turn has driven a
+  real campus tool call through a real model. `AGENT_RUNTIME=fake` deliberately
+  never calls a tool.
+- **The four servers under agno's MCP client.** They were previously launched by
+  Hermes' own client. The transport is the same stdio protocol and the specs are
+  asserted in `tests/test_campus_config.py`, but the handshake has not been run
+  against the real servers.

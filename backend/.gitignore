@@ -11,3 +11,7 @@ venv/
 
 # Local pre-migration database snapshots
 *.db.bak-*
+
+# Local CAMPUS_STATE_ROOT. Holds cached campus session tokens —
+# never commit this.
+.campus-state/

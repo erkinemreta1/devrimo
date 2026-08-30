@@ -21,8 +21,6 @@ class AgentOut(BaseModel):
     id: str
     user_id: str
     status: AgentStatus
-    host_port: int | None = None
-    hermes_image_tag: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -32,8 +30,6 @@ class AgentOut(BaseModel):
             id=str(agent.id),
             user_id=str(agent.user_id),
             status=agent.status,
-            host_port=agent.host_port,
-            hermes_image_tag=agent.hermes_image_tag,
             created_at=agent.created_at,
             updated_at=agent.updated_at,
         )

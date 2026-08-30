@@ -1,75 +1,73 @@
-import asyncio
+"""Idle eviction.
+
+The container-era reconciler also healed crashed containers and failed out
+stuck provisioning; neither exists any more. An agent is built synchronously on
+the turn that needs it, so there is no half-built state to reconcile — what is
+left is making sure agents that stopped being used stop holding subprocesses.
+"""
+
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select
-
-from app.agents import manager
+from app.agents.pool import get_pool
 from app.agents.reconciler import reconcile_once
-from app.db.models import Agent, AgentStatus
-from app.db.session import SessionLocal
 from tests.conftest import auth_header, new_user_id
 
 
-async def _provision_and_wait(client, headers):
+async def _provision_and_chat(client, headers):
     await client.post("/api/v1/agents/provision", headers=headers)
-    for _ in range(50):
-        response = await client.get("/api/v1/agents/me", headers=headers)
-        if response.json()["status"] == "running":
-            return
-        await asyncio.sleep(0.02)
-    raise AssertionError("agent never became running")
+    await client.post(
+        "/api/v1/chat/completions",
+        headers=headers,
+        json={"messages": [{"role": "user", "content": "hi"}], "session_id": "thread-1"},
+    )
 
 
-async def test_reconciler_reaps_idle_agents(client):
+async def test_reconciler_evicts_idle_agents(client):
     headers = auth_header(new_user_id())
-    await _provision_and_wait(client, headers)
+    await _provision_and_chat(client, headers)
 
-    async with SessionLocal() as db:
-        result = await db.execute(select(Agent))
-        agent = result.scalar_one()
-        agent.last_active_at = datetime.now(UTC) - timedelta(hours=1)
-        await db.commit()
+    pool = get_pool()
+    assert pool.size() == 1
+    user_id = next(iter(pool._entries))
+    pool._entries[user_id].last_used_at = datetime.now(UTC) - timedelta(hours=1)
 
     await reconcile_once()
 
-    response = await client.get("/api/v1/agents/me", headers=headers)
-    assert response.json()["status"] == "stopped"
+    assert pool.size() == 0
 
 
-async def test_reconciler_heals_crashed_container(client):
+async def test_eviction_leaves_the_agent_usable(client):
+    """Eviction must be invisible: the entitlement and the history both survive."""
     headers = auth_header(new_user_id())
-    await _provision_and_wait(client, headers)
+    await _provision_and_chat(client, headers)
 
-    async with SessionLocal() as db:
-        result = await db.execute(select(Agent))
-        agent = result.scalar_one()
-        spec = manager.spec_for(agent)
+    pool = get_pool()
+    user_id = next(iter(pool._entries))
+    pool._entries[user_id].last_used_at = datetime.now(UTC) - timedelta(hours=1)
+    await reconcile_once()
 
-    runtime = manager.get_runtime()
-    runtime.containers[spec.container_name].running = False
+    # Still `running` — status describes the entitlement, not residency.
+    status = await client.get("/api/v1/agents/me", headers=headers)
+    assert status.json()["status"] == "running"
+
+    detail = await client.get("/api/v1/chat/sessions/thread-1", headers=headers)
+    assert detail.status_code == 200
+    assert detail.json()["messages"]
+
+    # And the next turn transparently rebuilds it.
+    response = await client.post(
+        "/api/v1/chat/completions",
+        headers=headers,
+        json={"messages": [{"role": "user", "content": "again"}], "session_id": "thread-1"},
+    )
+    assert response.status_code == 200
+    assert get_pool().size() == 1
+
+
+async def test_active_agents_are_left_alone(client):
+    headers = auth_header(new_user_id())
+    await _provision_and_chat(client, headers)
 
     await reconcile_once()
 
-    response = await client.get("/api/v1/agents/me", headers=headers)
-    assert response.json()["status"] == "running"
-
-
-async def test_reconciler_marks_stuck_provisioning_as_error(client):
-    headers = auth_header(new_user_id())
-    # Provision and let the (fake, instant) background job finish first, then force the
-    # row back into `provisioning` with a stale `created_at` — simulating a broker crash
-    # mid-provision, which the reconciler must notice and fail out of.
-    await _provision_and_wait(client, headers)
-
-    async with SessionLocal() as db:
-        result = await db.execute(select(Agent))
-        agent = result.scalar_one()
-        agent.status = AgentStatus.provisioning
-        agent.created_at = datetime.now(UTC) - timedelta(hours=1)
-        await db.commit()
-
-    await reconcile_once()
-
-    response = await client.get("/api/v1/agents/me", headers=headers)
-    body = response.json()
-    assert body["status"] == "error"
+    assert get_pool().size() == 1

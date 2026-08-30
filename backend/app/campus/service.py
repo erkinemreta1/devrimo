@@ -13,7 +13,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.campus.catalog import DEFAULT_ENABLED_TOOL_IDS, normalize_tool_ids
 from app.campus.credentials import CampusSecrets, secrets_for
-from app.campus.mcp_config import render_mcp_config, working_directories
+from app.campus.mcp_config import CampusServerSpec, build_server_specs
+from app.config import get_settings
 from app.core.crypto import encrypt_secret
 from app.db.models import CampusCredential, UserProfile
 
@@ -86,7 +87,8 @@ async def upsert_credential(
     )
     credential.verified_at = datetime.now(UTC) if verified else None
     credential.verification_error = verification_error
-    # Any change here invalidates the config baked into the running container.
+    # Any change here invalidates the toolset the resident agent was built
+    # with; the pool drops that agent so the next turn rebuilds it.
     credential.config_dirty = True
 
     await db.commit()
@@ -116,14 +118,20 @@ def enabled_tool_ids(credential: CampusCredential | None) -> list[str]:
     return normalize_tool_ids(credential.enabled_tools or [])
 
 
-async def campus_runtime_config(db: AsyncSession, user_id: UUID) -> tuple[str, tuple[str, ...]]:
-    """The rendered MCP config and required working dirs for this student's container.
+async def campus_server_specs(db: AsyncSession, user_id: UUID) -> list[CampusServerSpec]:
+    """The campus MCP servers this student's agent should be launched with.
 
-    A student with no credentials still gets a config — an empty one — so that
-    disconnecting actually removes the servers from a rebuilt container rather
-    than leaving the previous file in place on the volume.
+    A student with no credentials gets an empty list, which is a real state
+    worth building an agent for: they can still talk to it, just without any
+    campus tools attached.
     """
+    settings = get_settings()
     credential = await get_credential(db, user_id)
     secrets: CampusSecrets | None = secrets_for(credential)
-    tool_ids = enabled_tool_ids(credential)
-    return render_mcp_config(tool_ids, secrets), tuple(working_directories(tool_ids, secrets))
+    return build_server_specs(
+        user_id,
+        enabled_tool_ids(credential),
+        secrets,
+        mcp_root=settings.campus_mcp_root,
+        state_root=settings.campus_state_root,
+    )

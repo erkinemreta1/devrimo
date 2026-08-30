@@ -15,7 +15,10 @@ async function ensureRunning(token: string) {
     agent = await provisionAgent(token);
   }
 
-  if (agent.status === "stopped") return startAgent(token);
+  // An earlier failed build leaves the entitlement in `error`. Retry the
+  // actual backend start path so a transient/local configuration failure can
+  // recover instead of returning the stale error forever.
+  if (agent.status === "stopped" || agent.status === "error") return startAgent(token);
   if (agent.status !== "provisioning") return agent;
 
   const deadline = Date.now() + 30_000;

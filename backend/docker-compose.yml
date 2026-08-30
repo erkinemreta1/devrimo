@@ -23,6 +23,13 @@ services:
       - .env
     environment:
       DATABASE_URL: postgresql+asyncpg://devrimo:devrimo@postgres:5432/devrimo
+      # The local .env uses a relative path for non-container development;
+      # inside Docker MCP working directories must use the writable volume.
+      CAMPUS_STATE_ROOT: /var/lib/devrimo/campus
+      # The Agent is constructed with telemetry=False; this is the second
+      # belt. Agno otherwise posts run telemetry to os-api.agno.com, and these
+      # runs are students' campus conversations.
+      AGNO_TELEMETRY: "false"
     ports:
       - "8000:8000"
     depends_on:
@@ -30,40 +37,49 @@ services:
         condition: service_healthy
     networks:
       - devrimo-internal
-      - devrimo-agents
     volumes:
-      # Lets the broker create/start/stop/destroy per-user agent containers
-      # via the Docker SDK (app/agents/docker_runtime.py). This grants the
-      # broker container host-root-equivalent access — acceptable for a
-      # single-host dev/staging setup, but for a real production deployment
-      # put a scoped proxy (e.g. Tecnativa/docker-socket-proxy, allowing only
-      # the container/volume/network endpoints this app actually calls) in
-      # front of the socket instead of mounting it directly.
-      - /var/run/docker.sock:/var/run/docker.sock
+      # Per-student MCP working directories (CAMPUS_STATE_ROOT). Servers that
+      # cache a campus session token relative to their CWD write here, so this
+      # has to outlive a container restart or every student re-authenticates
+      # to ODTÜClass on every deploy.
+      - devrimo-campus-state:/var/lib/devrimo/campus
+    # The campus MCP servers are subprocesses of this container, so the limits
+    # that used to be per-agent-container now apply to the broker as a whole.
+    # AGENT_POOL_MAX_SIZE bounds how many students can be resident at once;
+    # size these together.
+    mem_limit: 4g
+    pids_limit: 4096
+    security_opt:
+      - no-new-privileges
+    # No Docker socket. The broker no longer creates containers, which removes
+    # the host-root-equivalent mount this file used to carry — and lets the
+    # image drop to an unprivileged user (see Dockerfile).
 
 networks:
   devrimo-internal:
-    # Postgres <-> broker only. Agent containers are never attached here.
-    name: devrimo-internal
-    driver: bridge
-  devrimo-agents:
-    # Broker <-> per-user Hermes containers. No inbound from the host and no
-    # route to devrimo-internal (agent containers can't reach Postgres).
-    # Outbound to the internet is currently open, since agents need it to
-    # reach the model provider — see AGENT_OPENAI_BASE_URL. Before this goes
-    # anywhere near production traffic, put an egress proxy with an
-    # allowlist (model endpoint + campus MCP servers only) in front of this
-    # network and flip it to `internal: true`; see the plan's
-    # "Isolation & trust" section for why.
+    # Postgres <-> broker. There is no longer a second network: the agents that
+    # used to live on it are now threads and subprocesses inside the broker.
     #
-    # Named explicitly (not left to Compose's default `<project>_...`
-    # prefixing) because app/agents/docker_runtime.py looks this network up
-    # by the literal DOCKER_NETWORK setting via the Docker SDK, which
-    # doesn't know about Compose's project-name aliasing. If this name and
-    # DOCKER_NETWORK ever diverge, the broker ends up on a different network
-    # than the agent containers it creates.
-    name: devrimo-agents
+    # Deliberately no egress allowlist here, despite an earlier note in this
+    # file saying one belonged here. Compose can express an allowlist only as an
+    # HTTP proxy, and an HTTP proxy cannot filter this particular traffic mix:
+    #
+    #   - webmail speaks IMAP/SMTP (993/465). imaplib and smtplib ignore proxy
+    #     environment entirely, so it would pass unfiltered — and it is the one
+    #     campus tool that can act as the student rather than just read.
+    #   - the other three would not be filtered either. The MCP SDK spawns each
+    #     server with only HOME/LOGNAME/PATH/SHELL/TERM/USER inherited, so an
+    #     HTTPS_PROXY set here never reaches them at all.
+    #
+    # Filtering this set means L4, and the broker cannot apply it to itself:
+    # nftables needs NET_ADMIN, which would give back the privilege that
+    # removing the Docker socket just took away. It belongs on the host, on the
+    # FORWARD chain for this bridge. That is deployment configuration, not a
+    # promise this file can keep — see "Egress" in README.md for what it is
+    # worth and what it does not cover.
+    name: devrimo-internal
     driver: bridge
 
 volumes:
   devrimo-postgres:
+  devrimo-campus-state:

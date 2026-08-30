@@ -23,17 +23,15 @@ async def test_missing_bearer_is_401(client):
     assert response.status_code == 401
 
 
-async def test_provision_then_reaches_running(client):
+async def test_provision_is_immediately_running(client):
     headers = auth_header(new_user_id())
 
     response = await client.post("/api/v1/agents/provision", headers=headers)
     assert response.status_code == 201
-    assert response.json()["status"] == "provisioning"
-
-    final = await _wait_until(client, headers, "running")
-    body = final.json()
+    # Provisioning is synchronous now: there is no container to build, so the
+    # agent is usable the moment the row exists.
+    body = response.json()
     assert body["status"] == "running"
-    assert body["hermes_image_tag"]
     assert body["user_id"]
 
 

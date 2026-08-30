@@ -1,0 +1,134 @@
+"""Turn a student's campus server specs into connected Agno toolkits.
+
+This is the module that actually spawns campus MCP servers. Everything it
+launches is a subprocess of the broker, so two properties matter and are
+enforced here rather than left to a caller:
+
+* **One env per server.** Each :class:`~agno.tools.mcp.MCPTools` is built from
+  its own :class:`mcp.StdioServerParameters`, so a server sees only the
+  credentials its catalog entry asked for. The MCP SDK merges that env over
+  ``get_default_environment()`` — ``HOME``/``LOGNAME``/``PATH``/``SHELL``/
+  ``TERM``/``USER`` only — so the broker's own ``SECRET_ENCRYPTION_KEY``,
+  ``DATABASE_URL``, and model-provider key are never inherited by a scraper.
+
+* **``server_params`` and never ``command``.** ``MCPTools.__init__`` rebuilds
+  ``server_params`` from scratch when ``command`` is also passed, silently
+  dropping ``cwd`` — which odtuclass needs, because it caches its Moodle
+  session token relative to its working directory.
+"""
+
+import asyncio
+from pathlib import Path
+
+from agno.tools.mcp import MCPTools
+from mcp import StdioServerParameters
+
+from app.campus.mcp_config import CampusServerSpec
+from app.logging import get_logger
+
+logger = get_logger(__name__)
+
+
+def _prepare_working_dir(path: str) -> bool:
+    """Create this server's private working directory. False if we cannot.
+
+    0700: these directories hold cached campus session tokens, and on a
+    single-tenant broker host the only thing standing between two students'
+    caches is the directory mode.
+
+    Unwritable is a deployment condition, not a bug to crash on:
+    ``CAMPUS_STATE_ROOT`` defaults to a path the image creates, so a dev
+    machine or a misconfigured volume hits this and must still get an agent.
+    """
+    try:
+        Path(path).mkdir(parents=True, exist_ok=True, mode=0o700)
+    except OSError as exc:
+        logger.warning("campus_state_dir_unavailable", path=path, error=str(exc))
+        return False
+    return True
+
+
+def build_toolkits(specs: list[CampusServerSpec], *, timeout_seconds: int) -> list[MCPTools]:
+    """Construct (but do not connect) one toolkit per campus server.
+
+    Skips any server whose working directory cannot be prepared, on the same
+    reasoning as :func:`connect_toolkits`: one unavailable campus tool must not
+    cost the student their whole agent.
+    """
+    toolkits: list[MCPTools] = []
+    for spec in specs:
+        if spec.cwd and not _prepare_working_dir(spec.cwd):
+            # Skipped rather than launched without a cwd. A server that caches
+            # a session token relative to its working directory would otherwise
+            # write it into the broker's own cwd — shared by every student.
+            logger.warning("campus_server_skipped", server=spec.tool_id, reason="state_dir_unavailable")
+            continue
+        toolkits.append(
+            MCPTools(
+                # Named for the tool so a failure is traceable to one server.
+                name=f"campus:{spec.tool_id}",
+                server_params=StdioServerParameters(
+                    command=spec.command,
+                    args=list(spec.args),
+                    env=dict(spec.env),
+                    cwd=spec.cwd,
+                ),
+                transport="stdio",
+                timeout_seconds=timeout_seconds,
+                # The four servers were written independently and several use
+                # generic names (``search``, ``list_courses``); without this a
+                # collision would shadow one server's tool with another's.
+                tool_name_prefix=spec.tool_id,
+                exclude_tools=list(spec.exclude_tools) or None,
+            )
+        )
+    return toolkits
+
+
+def _is_connected(toolkit: MCPTools) -> bool:
+    """Whether a toolkit actually came up.
+
+    ``MCPTools.connect()`` logs and swallows every failure rather than raising
+    — a server whose interpreter is missing entirely returns normally from
+    ``connect()`` — so the return value says nothing. ``_initialized`` is the
+    only honest signal, and an unconnected toolkit handed to an Agent
+    advertises no tools while still being asked about on every run.
+    """
+    return bool(getattr(toolkit, "_initialized", False))
+
+
+async def connect_toolkits(toolkits: list[MCPTools]) -> list[MCPTools]:
+    """Connect each toolkit, dropping any that fails.
+
+    One campus server being down is not a reason to deny the student their
+    agent — the persona already tells the model to say so plainly when a tool
+    it expected is missing. The rest still come up.
+    """
+    connected: list[MCPTools] = []
+    for toolkit in toolkits:
+        try:
+            await toolkit.connect()
+        except Exception as exc:  # defensive: connect() is documented not to raise
+            logger.warning("campus_server_connect_failed", server=toolkit.name, error=str(exc))
+            continue
+        if not _is_connected(toolkit):
+            logger.warning("campus_server_unavailable", server=toolkit.name)
+            await close_toolkits([toolkit])
+            continue
+        connected.append(toolkit)
+        logger.info("campus_server_connected", server=toolkit.name, tools=len(toolkit.functions or {}))
+    return connected
+
+
+async def close_toolkits(toolkits: list[MCPTools]) -> None:
+    """Close every toolkit, and never raise.
+
+    Called from eviction and shutdown paths where the caller has nothing useful
+    to do about a failure and the remaining toolkits still need closing — a
+    leaked subprocess holds a student's credentials in memory.
+    """
+    for toolkit in toolkits:
+        try:
+            await toolkit.close()
+        except (Exception, asyncio.CancelledError) as exc:
+            logger.warning("campus_server_close_failed", server=toolkit.name, error=str(exc))

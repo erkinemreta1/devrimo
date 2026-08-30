@@ -5,14 +5,24 @@ broker does with a verification result, never that METU's SSO behaves a
 particular way.
 """
 
-import json
-
 import pytest
 
-from app.agents import manager
+from app.agents.pool import get_pool
 from app.api.v1 import campus as campus_routes
+from app.campus import service as campus_service
 from app.campus.verify import VerificationResult
+from app.db.session import SessionLocal
 from tests.conftest import auth_header, new_user_id
+
+
+async def _specs_for(user_id):
+    """The campus servers this student's agent would actually be launched with.
+
+    The container-era tests inspected the config file written into a container;
+    the equivalent now is the spec list the pool builds toolkits from.
+    """
+    async with SessionLocal() as db:
+        return await campus_service.campus_server_specs(db, user_id)
 
 
 @pytest.fixture
@@ -160,45 +170,42 @@ async def test_agent_container_is_built_with_the_students_mcp_config(client, acc
 
     provision = await client.post("/api/v1/agents/provision", headers=headers)
     assert provision.status_code == 201
-    # Provisioning finishes on a background task; poll the status the same way
-    # the frontend does.
-    for _ in range(40):
-        agent = (await client.get("/api/v1/agents/me", headers=headers)).json()
-        if agent["status"] != "provisioning":
-            break
 
-    runtime = manager.get_runtime()
-    container = runtime.containers[f"hermes-{user_id}"]
-    servers = json.loads(container.mcp_config)
+    specs = await _specs_for(user_id)
+    by_id = {spec.tool_id: spec for spec in specs}
 
-    assert set(servers) == {"sais", "webmail"}
-    assert servers["sais"]["env"]["SAIS_USERNAME"] == "e123456"
-    assert servers["sais"]["env"]["SAIS_PASSWORD"] == "hunter2"
-    assert servers["webmail"]["env"]["METU_PASSWORD"] == "hunter2"
+    assert set(by_id) == {"sais", "webmail"}
+    assert by_id["sais"].env["SAIS_USERNAME"] == "e123456"
+    assert by_id["sais"].env["SAIS_PASSWORD"] == "hunter2"
+    assert by_id["webmail"].env["METU_PASSWORD"] == "hunter2"
 
 
-async def test_agent_without_a_connection_gets_an_empty_config(client):
+async def test_agent_without_a_connection_gets_no_campus_servers(client):
     user_id = new_user_id()
     headers = auth_header(user_id)
     await client.post("/api/v1/agents/provision", headers=headers)
-    for _ in range(40):
-        agent = (await client.get("/api/v1/agents/me", headers=headers)).json()
-        if agent["status"] != "provisioning":
-            break
 
-    container = manager.get_runtime().containers[f"hermes-{user_id}"]
-    assert json.loads(container.mcp_config) == {}
+    assert await _specs_for(user_id) == []
+    # And is still perfectly usable, just without campus tools.
+    response = await client.post(
+        "/api/v1/chat/completions",
+        headers=headers,
+        json={"messages": [{"role": "user", "content": "hi"}], "session_id": "t1"},
+    )
+    assert response.status_code == 200
 
 
-async def test_changing_the_connection_rebuilds_a_running_agent(client, accept_credentials):
+async def test_changing_the_connection_drops_the_resident_agent(client, accept_credentials):
+    """A revoked tool has to stop being available immediately, not next session."""
     user_id = new_user_id()
     headers = auth_header(user_id)
     await client.post("/api/v1/agents/provision", headers=headers)
-    for _ in range(40):
-        agent = (await client.get("/api/v1/agents/me", headers=headers)).json()
-        if agent["status"] == "running":
-            break
-    assert agent["status"] == "running"
+    await client.post(
+        "/api/v1/chat/completions",
+        headers=headers,
+        json={"messages": [{"role": "user", "content": "hi"}], "session_id": "t1"},
+    )
+    assert get_pool().is_resident(user_id)
 
     response = await client.put(
         "/api/v1/campus/connection",
@@ -209,8 +216,8 @@ async def test_changing_the_connection_rebuilds_a_running_agent(client, accept_c
     # Applied eagerly, so the student doesn't have to restart anything.
     assert response.json()["needs_restart"] is False
 
-    container = manager.get_runtime().containers[f"hermes-{user_id}"]
-    assert set(json.loads(container.mcp_config)) == {"sais"}
+    assert not get_pool().is_resident(user_id)
+    assert {spec.tool_id for spec in await _specs_for(user_id)} == {"sais"}
 
 
 async def test_connections_are_isolated_per_user(client, accept_credentials):
@@ -230,20 +237,16 @@ async def test_campus_endpoints_require_auth(client):
     assert (await client.get("/api/v1/profile")).status_code == 401
 
 
-async def test_a_change_made_while_stopped_is_pushed_on_restart(client, accept_credentials):
-    """The stale-toolset case: the container outlives the config it was built with."""
+async def test_a_change_made_while_stopped_is_applied_on_restart(client, accept_credentials):
+    """The stale-toolset case, which used to outlive the config it was built with."""
     user_id = new_user_id()
     headers = auth_header(user_id)
     await client.post("/api/v1/agents/provision", headers=headers)
-    for _ in range(40):
-        agent = (await client.get("/api/v1/agents/me", headers=headers)).json()
-        if agent["status"] == "running":
-            break
 
     stopped = await client.post("/api/v1/agents/stop", headers=headers)
     assert stopped.json()["status"] == "stopped"
 
-    # Saved while stopped, so there is no running container to push it into.
+    # Saved while stopped, so there is no resident agent to drop.
     saved = await client.put(
         "/api/v1/campus/connection",
         headers=headers,
@@ -254,8 +257,8 @@ async def test_a_change_made_while_stopped_is_pushed_on_restart(client, accept_c
     started = await client.post("/api/v1/agents/start", headers=headers)
     assert started.json()["status"] == "running"
 
-    container = manager.get_runtime().containers[f"hermes-{user_id}"]
-    assert set(json.loads(container.mcp_config)) == {"sais"}
+    # The rebuild on start reads current credentials, so the toolset is fresh.
+    assert {spec.tool_id for spec in await _specs_for(user_id)} == {"sais"}
 
     after = await client.get("/api/v1/campus/connection", headers=headers)
     assert after.json()["needs_restart"] is False
