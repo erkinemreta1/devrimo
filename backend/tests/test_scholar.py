@@ -266,7 +266,7 @@ def test_scholar_config_uses_compression_not_offload(monkeypatch):
         assert agent.compress_tool_results is True
         assert agent.offload_tool_results is False
         assert agent.store_tool_messages is False
-        assert agent.tool_call_limit == 10
+        assert agent.tool_call_limit == 4
         assert agent.timezone_identifier == "Europe/Istanbul"
     finally:
         get_settings.cache_clear()

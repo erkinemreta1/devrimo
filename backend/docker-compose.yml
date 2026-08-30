@@ -71,6 +71,9 @@ services:
       DATABASE_URL: postgresql+asyncpg://devrimo:devrimo@postgres:5432/devrimo
       AGENTOS_ENABLED: "true"
       AGENTOS_HOST: "0.0.0.0"
+      AGENTOS_JWT_VERIFICATION_KEY: ""
+      AGENTOS_JWT_VERIFICATION_KEY_FILE: ""
+      AGENTOS_JWKS_FILE: /run/secrets/agentos-jwks.json
       AGNO_TELEMETRY: "false"
     ports:
       # Host-only by default. Put this behind authenticated TLS/VPN when the
@@ -81,6 +84,8 @@ services:
         condition: service_healthy
     networks:
       - devrimo-internal
+    volumes:
+      - ./secrets/agentos-jwks.json:/run/secrets/agentos-jwks.json:ro
     security_opt:
       - no-new-privileges
 

@@ -27,16 +27,19 @@ class Settings(BaseSettings):
     agent_model: str = "muse-spark-1.2-contributor"
     agent_openai_base_url: str = "https://opencode.ai/zen/go/v1"
     agent_openai_api_key: str = ""
-    agent_max_tokens: int = 32768
+    agent_max_tokens: int = 2048
 
     # How many prior runs of a session are replayed into the model's context.
     agent_history_runs: int = 10
     scholar_history_runs: int = 3
-    agent_tool_call_limit: int = 10
+    agent_tool_call_limit: int = 4
     agent_compress_tool_results: bool = True
     agent_compress_tool_results_limit: int = 3
     agent_learning_enabled: bool = True
-    agent_retries: int = 2
+    agent_retries: int = 1
+    chat_run_timeout_seconds: int = 120
+    chat_max_input_characters: int = 12_000
+    user_token_limit_per_hour: int = 30_000
     agent_store_events: bool = False
     agent_tracing_enabled: bool = False
     # A user's agent (and its MCP subprocesses) is torn down after this long
@@ -67,10 +70,12 @@ class Settings(BaseSettings):
     agentos_host: str = "127.0.0.1"
     agentos_port: int = 7777
     agentos_jwt_verification_key: str = ""
+    agentos_jwt_verification_key_file: str = ""
     agentos_jwks_file: str = ""
     agentos_jwt_algorithm: str = "RS256"
+    agentos_verify_audience: bool = True
     agentos_jwt_audience: str = "devrimo"
-    agentos_admin_scope: str = "agentos:admin"
+    agentos_admin_scope: str = "agent_os:admin"
     agentos_cors_origins: str = "https://os.agno.com"
 
     @property

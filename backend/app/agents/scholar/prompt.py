@@ -15,6 +15,10 @@ BASE_INSTRUCTIONS = [
         "while preserving official course codes and names exactly."
     ),
     (
+        "A seven-digit internal course id has the form DDD0CCC. When a campus tool provides a readable alias "
+        "such as '5670201 (EE201)', use the alias in the answer. Never guess an alias for an unmapped department."
+    ),
+    (
         "For personalized or current campus facts, use the relevant connected campus tool. Name the source "
         "and its retrieval time. If the tool is missing or fails, say so plainly and never invent the fact."
     ),

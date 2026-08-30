@@ -7,6 +7,7 @@ import time
 from typing import Any
 from uuid import UUID
 
+from app.campus.course_codes import annotate_course_codes
 from app.db.models import AgentToolAudit
 from app.db.session import SessionLocal
 from app.logging import get_logger
@@ -14,6 +15,29 @@ from app.logging import get_logger
 logger = get_logger(__name__)
 MAX_TOOL_RESULT_CHARS = 16_000
 MUTATING_TOOL_NAMES = {"webmail_send_email", "webmail_reply_email"}
+COURSE_DATA_TOOL_NAMES = {
+    "get_schedule",
+    "get_transcript",
+    "list_program_courses",
+    "get_course_info",
+    "get_course_prerequisites",
+    "get_course_replacements",
+    "get_thesis_courses",
+    "get_student_course_categories",
+    "get_student_courses_by_category",
+    "get_enrolled_courses",
+    "get_course_announcements",
+    "get_course_syllabus",
+    "get_upcoming_assignments",
+    "get_lab_recitation_info",
+}
+
+
+def _is_course_data_tool(function_name: str) -> bool:
+    return any(
+        function_name == tool_name or function_name.endswith(f"_{tool_name}")
+        for tool_name in COURSE_DATA_TOOL_NAMES
+    )
 
 
 def _canonical_digest(arguments: dict[str, Any]) -> str:
@@ -96,6 +120,8 @@ async def production_tool_hook(function_name, function, arguments, run_context=N
         if inspect.isawaitable(result):
             result = await result
         logger.info("agent_tool_completed", tool=function_name, duration_ms=round((time.monotonic() - started) * 1000))
+        if _is_course_data_tool(function_name):
+            result = annotate_course_codes(result)
         return _bound_result(result)
     except Exception as exc:
         error = exc

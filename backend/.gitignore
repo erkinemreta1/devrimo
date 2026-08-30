@@ -3,6 +3,8 @@ __pycache__/
 .venv/
 venv/
 .env
+secrets/*
+!secrets/.gitkeep
 *.db
 *.db-journal
 .pytest_cache/

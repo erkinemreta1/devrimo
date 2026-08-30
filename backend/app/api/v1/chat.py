@@ -31,6 +31,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents import manager
+from app.agents.rate_limit import TurnUsage, enforce_token_budget, record_token_usage
 from app.auth.dependencies import get_current_user
 from app.auth.jwt import AuthenticatedUser
 from app.config import get_settings
@@ -83,16 +84,18 @@ def _confirmation_payload(event) -> list[dict]:
     return requirements
 
 
-async def _serialize_events(events, model: str, user_id: str) -> AsyncIterator[bytes]:
+async def _serialize_events(events, model: str, user_id: str, usage: TurnUsage) -> AsyncIterator[bytes]:
     """Agno run events -> OpenAI-compatible SSE."""
     from agno.run.agent import RunEvent
 
     async for event in events:
+        usage.observe_event(event)
         name = getattr(event, "event", None)
 
         if name == RunEvent.run_content.value:
             content = getattr(event, "content", None)
             if isinstance(content, str) and content:
+                usage.observe_content(content)
                 yield _chunk(model, delta={"role": "assistant", "content": content})
 
         elif name == RunEvent.tool_call_started.value:
@@ -128,6 +131,7 @@ async def _serialize_run(
     user_id: str,
     model: str,
     dependencies: dict,
+    usage: TurnUsage,
 ) -> AsyncIterator[bytes]:
     stream = agno_agent.arun(
         input=text,
@@ -137,7 +141,7 @@ async def _serialize_run(
         stream=True,
         stream_events=True,
     )
-    async for chunk in _serialize_events(stream, model, user_id):
+    async for chunk in _serialize_events(stream, model, user_id, usage):
         yield chunk
 
 
@@ -217,6 +221,7 @@ async def chat_completions(
     db: AsyncSession = Depends(get_db),
 ) -> StreamingResponse:
     agent = await manager.get_agent_or_404(db, user.id)
+    await enforce_token_budget(db, user.id)
 
     latest_user_message = next(
         (m.content for m in reversed(body.messages) if m.role == "user"),
@@ -224,6 +229,12 @@ async def chat_completions(
     )
     if not latest_user_message:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "No user message to respond to")
+    max_input_characters = get_settings().chat_max_input_characters
+    if max_input_characters > 0 and len(latest_user_message) > max_input_characters:
+        raise HTTPException(
+            status.HTTP_413_CONTENT_TOO_LARGE,
+            f"Message is too long. Maximum length is {max_input_characters} characters.",
+        )
 
     lock_owner = str(uuid4())
     if not await manager.acquire_turn_lock(db, agent, lock_owner):
@@ -249,19 +260,31 @@ async def chat_completions(
     user_id = user.id
 
     async def stream() -> AsyncIterator[bytes]:
+        settings = get_settings()
+        usage = TurnUsage(input_characters=len(latest_user_message))
         heartbeat_stop = asyncio.Event()
         heartbeat = asyncio.create_task(_turn_lock_heartbeat(agent.id, lock_owner, heartbeat_stop))
         try:
-            source = _serialize_run(
-                agno_agent,
-                latest_user_message,
-                agno_session_id,
-                str(user_id),
+            timeout = settings.chat_run_timeout_seconds if settings.chat_run_timeout_seconds > 0 else None
+            async with asyncio.timeout(timeout):
+                source = _serialize_run(
+                    agno_agent,
+                    latest_user_message,
+                    agno_session_id,
+                    str(user_id),
+                    model,
+                    dependencies,
+                    usage,
+                )
+                async for chunk in _with_keepalive(source):
+                    yield chunk
+        except TimeoutError:
+            logger.warning("chat_run_timeout", user_id=str(user_id), timeout_seconds=settings.chat_run_timeout_seconds)
+            yield _chunk(
                 model,
-                dependencies,
+                extension={"type": "error", "message": "This response exceeded the time limit and was stopped."},
+                finish="length",
             )
-            async for chunk in _with_keepalive(source):
-                yield chunk
         except Exception as exc:  # never let a broken stream leave the lock held
             logger.error("chat_stream_failed", user_id=str(user_id), error=str(exc))
             yield _chunk(model, extension={"type": "error", "message": "Chat stream failed"}, finish="stop")
@@ -269,6 +292,11 @@ async def chat_completions(
             heartbeat_stop.set()
             await heartbeat
             yield b"data: [DONE]\n\n"
+            try:
+                async with SessionLocal() as usage_db:
+                    await record_token_usage(usage_db, user_id, usage.billable_tokens)
+            except Exception as usage_error:
+                logger.error("token_usage_record_failed", user_id=str(user_id), error=usage_error.__class__.__name__)
             await _finalize_turn(user_id, chat_session_id, lock_owner, latest_user_message, lease=lease)
 
     return StreamingResponse(
@@ -286,6 +314,7 @@ async def confirm_tool_call(
 ) -> StreamingResponse:
     """Approve or reject an Agno-paused tool call, scoped to its owner and session."""
     agent = await manager.get_agent_or_404(db, user.id)
+    await enforce_token_budget(db, user.id)
     result = await db.execute(
         select(ChatSession).where(
             ChatSession.id == body.session_id,
@@ -346,24 +375,37 @@ async def confirm_tool_call(
     model = get_settings().agent_model
 
     async def stream() -> AsyncIterator[bytes]:
+        settings = get_settings()
+        usage = TurnUsage()
         heartbeat_stop = asyncio.Event()
         heartbeat = asyncio.create_task(_turn_lock_heartbeat(agent.id, lock_owner, heartbeat_stop))
         try:
-            events = agno_agent.acontinue_run(
-                # Resume from the persisted run id. Passing the separately
-                # loaded RunOutput here makes Agno treat it as an in-memory
-                # continuation and can skip rebinding the approved tool to its
-                # live callable after a process/request boundary.
-                run_id=body.run_id,
-                requirements=run_output.requirements,
-                stream=True,
-                stream_events=True,
-                user_id=str(user.id),
-                session_id=agno_session_id,
-                dependencies=dependencies,
+            timeout = settings.chat_run_timeout_seconds if settings.chat_run_timeout_seconds > 0 else None
+            async with asyncio.timeout(timeout):
+                events = agno_agent.acontinue_run(
+                    # Resume from the persisted run id. Passing the separately
+                    # loaded RunOutput here makes Agno treat it as an in-memory
+                    # continuation and can skip rebinding the approved tool to its
+                    # live callable after a process/request boundary.
+                    run_id=body.run_id,
+                    requirements=run_output.requirements,
+                    stream=True,
+                    stream_events=True,
+                    user_id=str(user.id),
+                    session_id=agno_session_id,
+                    dependencies=dependencies,
+                )
+                async for chunk in _with_keepalive(_serialize_events(events, model, str(user.id), usage)):
+                    yield chunk
+        except TimeoutError:
+            logger.warning(
+                "confirmation_run_timeout", user_id=str(user.id), timeout_seconds=settings.chat_run_timeout_seconds
             )
-            async for chunk in _with_keepalive(_serialize_events(events, model, str(user.id))):
-                yield chunk
+            yield _chunk(
+                model,
+                extension={"type": "error", "message": "This response exceeded the time limit and was stopped."},
+                finish="length",
+            )
         except Exception as exc:
             logger.error("confirmation_stream_failed", user_id=str(user.id), error=str(exc))
             yield _chunk(model, extension={"type": "error", "message": "Confirmation failed"}, finish="stop")
@@ -371,6 +413,13 @@ async def confirm_tool_call(
             heartbeat_stop.set()
             await heartbeat
             yield b"data: [DONE]\n\n"
+            try:
+                async with SessionLocal() as usage_db:
+                    await record_token_usage(usage_db, user.id, usage.billable_tokens)
+            except Exception as usage_error:
+                logger.error(
+                    "token_usage_record_failed", user_id=str(user.id), error=usage_error.__class__.__name__
+                )
             await _finalize_turn(user.id, chat_session.id, lock_owner, None, lease=lease, increment=False)
 
     return StreamingResponse(
