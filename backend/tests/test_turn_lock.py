@@ -62,3 +62,31 @@ async def test_expired_lease_can_be_stolen(client):
         agent = (await db.execute(select(Agent).where(Agent.id == agent.id))).scalar_one()
         acquired = await manager.acquire_turn_lock(db, agent, "owner-b")
     assert acquired is True
+
+
+async def test_owner_can_renew_turn_lease(client):
+    headers = auth_header(new_user_id())
+    agent = await _provisioned_agent(client, headers)
+
+    async with SessionLocal() as db:
+        agent = (await db.execute(select(Agent).where(Agent.id == agent.id))).scalar_one()
+        assert await manager.acquire_turn_lock(db, agent, "owner-a")
+        await db.refresh(agent)
+        before = agent.turn_lock_until
+
+    async with SessionLocal() as db:
+        assert await manager.renew_turn_lock(db, agent.id, "owner-a")
+        renewed = (await db.execute(select(Agent).where(Agent.id == agent.id))).scalar_one()
+        assert renewed.turn_lock_until >= before
+
+
+async def test_wrong_owner_cannot_renew_turn_lease(client):
+    headers = auth_header(new_user_id())
+    agent = await _provisioned_agent(client, headers)
+
+    async with SessionLocal() as db:
+        agent = (await db.execute(select(Agent).where(Agent.id == agent.id))).scalar_one()
+        assert await manager.acquire_turn_lock(db, agent, "owner-a")
+
+    async with SessionLocal() as db:
+        assert not await manager.renew_turn_lock(db, agent.id, "owner-b")

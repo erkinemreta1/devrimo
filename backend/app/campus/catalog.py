@@ -44,9 +44,11 @@ class CampusTool:
     # per-user directory under ``campus_state_root`` so two students never
     # share a cache. ``None`` means the server needs no writable directory.
     state_slug: str | None = None
-    # Tools to withhold from the model even when the server is enabled. This is
-    # how a server that can both read and act is offered read-only.
-    exclude_tools: tuple[str, ...] = ()
+    # Exact upstream names the model may receive. An allowlist means an
+    # upstream release adding a tool grants no new authority automatically.
+    include_tools: tuple[str, ...] = ()
+    # Allowed tools which still require the student to approve the exact call.
+    requires_confirmation_tools: tuple[str, ...] = ()
     default_enabled: bool = True
 
 
@@ -73,6 +75,7 @@ CAMPUS_TOOLS: tuple[CampusTool, ...] = (
             "LOCALE": "{locale}",
         },
         state_slug="sais",
+        include_tools=("get_student_info", "get_schedule", "get_transcript", "get_announcements"),
     ),
     CampusTool(
         id="course_info",
@@ -91,6 +94,17 @@ CAMPUS_TOOLS: tuple[CampusTool, ...] = (
             "LOCALE": "{locale}",
         },
         state_slug="course-info",
+        include_tools=(
+            "get_departments_and_semesters",
+            "search_departments",
+            "list_program_courses",
+            "get_course_info",
+            "get_course_prerequisites",
+            "get_course_replacements",
+            "get_thesis_courses",
+            "get_student_course_categories",
+            "get_student_courses_by_category",
+        ),
     ),
     CampusTool(
         id="odtuclass",
@@ -113,6 +127,13 @@ CAMPUS_TOOLS: tuple[CampusTool, ...] = (
         # ``os.getcwd()/.odtuclass_cache`` and writes downloads next to it, so
         # its CWD has to be on the writable per-user volume.
         state_slug="odtuclass",
+        include_tools=(
+            "get_enrolled_courses",
+            "get_course_announcements",
+            "get_course_syllabus",
+            "get_upcoming_assignments",
+            "get_lab_recitation_info",
+        ),
     ),
     CampusTool(
         id="webmail",
@@ -121,12 +142,12 @@ CAMPUS_TOOLS: tuple[CampusTool, ...] = (
         description_en="Read, search, and send mail from your @metu.edu.tr account",
         description_tr="@metu.edu.tr hesabında posta okuma, arama ve gönderme",
         scope_en=(
-            "Reads your METU mailbox over IMAP and can send mail as you over SMTP. "
-            "This is the only campus tool that can act on your behalf."
+            "Reads and searches your METU mailbox and can send or reply only after you approve the exact message. "
+            "It cannot delete, move, mark, or forward mail."
         ),
         scope_tr=(
-            "ODTÜ posta kutunu IMAP ile okur ve senin adına SMTP ile posta gönderebilir. "
-            "Senin adına işlem yapabilen tek kampüs aracı budur."
+            "ODTÜ posta kutunu okur ve arar; yalnızca tam iletiyi onayladıktan sonra gönderir veya yanıtlar. "
+            "Posta silemez, taşıyamaz, işaretleyemez veya iletemez."
         ),
         requires=("metu_password",),
         venv_slug="webmail",
@@ -137,6 +158,17 @@ CAMPUS_TOOLS: tuple[CampusTool, ...] = (
             "LOCALE": "{locale}",
         },
         state_slug="webmail",
+        include_tools=(
+            "get_mailbox_status",
+            "list_folders",
+            "list_emails",
+            "search_emails",
+            "read_email",
+            "get_attachment",
+            "send_email",
+            "reply_email",
+        ),
+        requires_confirmation_tools=("send_email", "reply_email"),
         # Opt-in: it can send mail as the student, so it should be a decision
         # they make rather than a default they discover afterwards.
         default_enabled=False,

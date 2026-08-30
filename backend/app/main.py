@@ -18,6 +18,15 @@ logger = get_logger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    settings = get_settings()
+    if settings.agent_tracing_enabled:
+        # OpenInference redaction flags are set in deployment configuration.
+        # This exporter writes to our Agno DB; it does not send traces to Agno.
+        from agno.tracing import setup_tracing
+
+        from app.agents.store import get_agno_db
+
+        setup_tracing(db=get_agno_db(), batch_processing=True)
     stop_event = asyncio.Event()
     reconciler_task = asyncio.create_task(run_reconciler_loop(stop_event))
     logger.info("startup_complete")

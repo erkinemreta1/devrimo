@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     # a scripted agent so the whole API can be exercised in tests and local dev
     # without a model provider or the four campus servers installed.
     agent_runtime: str = "agno"  # "agno" | "fake"
+    # Scholar is the production-hardened profile. Legacy remains available as
+    # an explicit rollback target while a deployment completes its eval gates.
+    agent_profile: str = "scholar"  # "scholar" | "legacy"
 
     agent_model: str = "muse-spark-1.2-contributor"
     agent_openai_base_url: str = "https://opencode.ai/zen/go/v1"
@@ -28,6 +31,14 @@ class Settings(BaseSettings):
 
     # How many prior runs of a session are replayed into the model's context.
     agent_history_runs: int = 10
+    scholar_history_runs: int = 3
+    agent_tool_call_limit: int = 10
+    agent_compress_tool_results: bool = True
+    agent_compress_tool_results_limit: int = 3
+    agent_learning_enabled: bool = True
+    agent_retries: int = 2
+    agent_store_events: bool = False
+    agent_tracing_enabled: bool = False
     # A user's agent (and its MCP subprocesses) is torn down after this long
     # with no turns. Nothing is lost — history lives in the database.
     agent_idle_timeout_seconds: int = 900
@@ -35,6 +46,8 @@ class Settings(BaseSettings):
     # is evicted past this, so a busy hour can't spawn unbounded subprocesses.
     agent_pool_max_size: int = 64
     reconcile_interval_seconds: int = 60
+    turn_lock_lease_seconds: int = 180
+    turn_lock_heartbeat_seconds: int = 60
 
     # --- Campus MCP servers ------------------------------------------------
     # Where the four per-server virtualenvs live on the broker host. The image
@@ -47,6 +60,19 @@ class Settings(BaseSettings):
 
     secret_encryption_key: str = "change-me-to-a-real-generated-secret"
 
+    # --- AgentOS -----------------------------------------------------------
+    # AgentOS runs as a separate, internal process. Production authorization
+    # uses JWT/RBAC; the old shared OS security key is intentionally not used.
+    agentos_enabled: bool = False
+    agentos_host: str = "127.0.0.1"
+    agentos_port: int = 7777
+    agentos_jwt_verification_key: str = ""
+    agentos_jwks_file: str = ""
+    agentos_jwt_algorithm: str = "RS256"
+    agentos_jwt_audience: str = "devrimo"
+    agentos_admin_scope: str = "agentos:admin"
+    agentos_cors_origins: str = "https://os.agno.com"
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
@@ -54,6 +80,10 @@ class Settings(BaseSettings):
     @property
     def jwks_url(self) -> str:
         return f"{self.supabase_url.rstrip('/')}/auth/v1/.well-known/jwks.json"
+
+    @property
+    def agentos_cors_origin_list(self) -> list[str]:
+        return [origin.strip() for origin in self.agentos_cors_origins.split(",") if origin.strip()]
 
 
 @lru_cache

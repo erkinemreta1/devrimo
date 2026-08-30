@@ -37,7 +37,7 @@ from app.config import get_settings
 from app.db.models import ChatSession
 from app.db.session import SessionLocal, get_db
 from app.logging import get_logger
-from app.schemas import ChatCompletionsRequestIn
+from app.schemas import ChatCompletionsRequestIn, ChatConfirmationIn
 
 router = APIRouter()
 logger = get_logger(__name__)
@@ -67,19 +67,27 @@ def _tool_name(event) -> str | None:
     return getattr(tool, "tool_name", None) or getattr(tool, "name", None)
 
 
-async def _serialize_run(agno_agent, text: str, session_id: str, user_id: str, model: str) -> AsyncIterator[bytes]:
+def _confirmation_payload(event) -> list[dict]:
+    requirements = []
+    for requirement in getattr(event, "active_requirements", []) or []:
+        if not getattr(requirement, "needs_confirmation", False):
+            continue
+        execution = getattr(requirement, "tool_execution", None)
+        requirements.append(
+            {
+                "id": requirement.id,
+                "tool": getattr(execution, "tool_name", None),
+                "arguments": getattr(execution, "tool_args", None) or {},
+            }
+        )
+    return requirements
+
+
+async def _serialize_events(events, model: str, user_id: str) -> AsyncIterator[bytes]:
     """Agno run events -> OpenAI-compatible SSE."""
     from agno.run.agent import RunEvent
 
-    stream = agno_agent.arun(
-        input=text,
-        session_id=session_id,
-        user_id=user_id,
-        stream=True,
-        stream_events=True,
-    )
-
-    async for event in stream:
+    async for event in events:
         name = getattr(event, "event", None)
 
         if name == RunEvent.run_content.value:
@@ -93,6 +101,17 @@ async def _serialize_run(agno_agent, text: str, session_id: str, user_id: str, m
         elif name == RunEvent.tool_call_completed.value:
             yield _chunk(model, extension={"type": "tool_call_completed", "tool": _tool_name(event)})
 
+        elif name == RunEvent.run_paused.value:
+            yield _chunk(
+                model,
+                extension={
+                    "type": "confirmation_required",
+                    "run_id": getattr(event, "run_id", None),
+                    "session_id": getattr(event, "session_id", None),
+                    "requirements": _confirmation_payload(event),
+                },
+            )
+
         elif name == RunEvent.run_error.value:
             detail = getattr(event, "content", None) or "The agent could not complete this turn."
             logger.error("agent_run_error", user_id=user_id, detail=str(detail))
@@ -100,6 +119,40 @@ async def _serialize_run(agno_agent, text: str, session_id: str, user_id: str, m
             return
 
     yield _chunk(model, delta={}, finish="stop")
+
+
+async def _serialize_run(
+    agno_agent,
+    text: str,
+    session_id: str,
+    user_id: str,
+    model: str,
+    dependencies: dict,
+) -> AsyncIterator[bytes]:
+    stream = agno_agent.arun(
+        input=text,
+        session_id=session_id,
+        user_id=user_id,
+        dependencies=dependencies,
+        stream=True,
+        stream_events=True,
+    )
+    async for chunk in _serialize_events(stream, model, user_id):
+        yield chunk
+
+
+async def _turn_lock_heartbeat(agent_id, owner: str, stop_event: asyncio.Event) -> None:
+    settings = get_settings()
+    interval = max(1, min(settings.turn_lock_heartbeat_seconds, settings.turn_lock_lease_seconds // 2))
+    while not stop_event.is_set():
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=interval)
+            return
+        except TimeoutError:
+            async with SessionLocal() as db:
+                if not await manager.renew_turn_lock(db, agent_id, owner):
+                    logger.error("turn_lock_heartbeat_lost", agent_id=str(agent_id))
+                    return
 
 
 async def _with_keepalive(source: AsyncIterator[bytes]) -> AsyncIterator[bytes]:
@@ -164,7 +217,6 @@ async def chat_completions(
     db: AsyncSession = Depends(get_db),
 ) -> StreamingResponse:
     agent = await manager.get_agent_or_404(db, user.id)
-    resident = await manager.resident_for(db, agent)
 
     latest_user_message = next(
         (m.content for m in reversed(body.messages) if m.role == "user"),
@@ -177,29 +229,47 @@ async def chat_completions(
     if not await manager.acquire_turn_lock(db, agent, lock_owner):
         raise HTTPException(status.HTTP_409_CONFLICT, "Agent is busy with another message")
 
+    lease = None
     try:
         chat_session = await _get_or_create_chat_session(db, user.id, agent.id, body.session_id)
+        lease = await manager.lease_for(db, agent)
+        from app.agents.scholar.context import build_run_dependencies
+
+        dependencies = await build_run_dependencies(db, user.id, lease.resident)
     except Exception:
+        if lease is not None:
+            await lease.release()
         await manager.release_turn_lock(db, agent, lock_owner)
         raise
 
     model = get_settings().agent_model
-    agno_agent = manager.agno_agent_for(resident)
+    agno_agent = lease.agent
     agno_session_id = chat_session.agno_session_id or chat_session.id
     chat_session_id = chat_session.id
     user_id = user.id
 
     async def stream() -> AsyncIterator[bytes]:
+        heartbeat_stop = asyncio.Event()
+        heartbeat = asyncio.create_task(_turn_lock_heartbeat(agent.id, lock_owner, heartbeat_stop))
         try:
-            source = _serialize_run(agno_agent, latest_user_message, agno_session_id, str(user_id), model)
+            source = _serialize_run(
+                agno_agent,
+                latest_user_message,
+                agno_session_id,
+                str(user_id),
+                model,
+                dependencies,
+            )
             async for chunk in _with_keepalive(source):
                 yield chunk
         except Exception as exc:  # never let a broken stream leave the lock held
             logger.error("chat_stream_failed", user_id=str(user_id), error=str(exc))
             yield _chunk(model, extension={"type": "error", "message": "Chat stream failed"}, finish="stop")
         finally:
+            heartbeat_stop.set()
+            await heartbeat
             yield b"data: [DONE]\n\n"
-            await _finalize_turn(user_id, chat_session_id, lock_owner, latest_user_message)
+            await _finalize_turn(user_id, chat_session_id, lock_owner, latest_user_message, lease=lease)
 
     return StreamingResponse(
         stream(),
@@ -208,7 +278,119 @@ async def chat_completions(
     )
 
 
-async def _finalize_turn(user_id, chat_session_id: str, lock_owner: str, first_user_text: str) -> None:
+@router.post("/confirmations")
+async def confirm_tool_call(
+    body: ChatConfirmationIn,
+    user: AuthenticatedUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> StreamingResponse:
+    """Approve or reject an Agno-paused tool call, scoped to its owner and session."""
+    agent = await manager.get_agent_or_404(db, user.id)
+    result = await db.execute(
+        select(ChatSession).where(
+            ChatSession.id == body.session_id,
+            ChatSession.user_id == user.id,
+            ChatSession.deleted_at.is_(None),
+        )
+    )
+    chat_session = result.scalar_one_or_none()
+    if chat_session is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Chat session not found")
+
+    lock_owner = str(uuid4())
+    if not await manager.acquire_turn_lock(db, agent, lock_owner):
+        raise HTTPException(status.HTTP_409_CONFLICT, "Agent is busy with another message")
+    try:
+        lease = await manager.lease_for(db, agent)
+        agno_agent = lease.agent
+        agno_session_id = chat_session.agno_session_id or chat_session.id
+        run_output = agno_agent.get_run_output(body.run_id, session_id=agno_session_id, user_id=str(user.id))
+        if run_output is None or not run_output.is_paused:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Paused run not found")
+        active_confirmations = [item for item in run_output.active_requirements if item.needs_confirmation]
+        if len(active_confirmations) != 1:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "Batched external actions are blocked; ask the agent to perform one action at a time",
+            )
+        requirement = next(
+            (item for item in active_confirmations if item.id == body.requirement_id),
+            None,
+        )
+        if requirement is None or not requirement.needs_confirmation:
+            raise HTTPException(status.HTTP_409_CONFLICT, "Confirmation is no longer pending")
+        if body.approved:
+            requirement.confirm()
+        else:
+            from app.agents.scholar.hooks import record_confirmation_rejection
+
+            execution = requirement.tool_execution
+            await record_confirmation_rejection(
+                user_id=str(user.id),
+                session_id=agno_session_id,
+                run_id=body.run_id,
+                tool_name=execution.tool_name,
+                arguments=execution.tool_args or {},
+            )
+            requirement.reject(note="Rejected by the student")
+
+        from app.agents.scholar.context import build_run_dependencies
+
+        dependencies = await build_run_dependencies(db, user.id, lease.resident)
+    except Exception:
+        if "lease" in locals():
+            await lease.release()
+        await manager.release_turn_lock(db, agent, lock_owner)
+        raise
+
+    model = get_settings().agent_model
+
+    async def stream() -> AsyncIterator[bytes]:
+        heartbeat_stop = asyncio.Event()
+        heartbeat = asyncio.create_task(_turn_lock_heartbeat(agent.id, lock_owner, heartbeat_stop))
+        try:
+            events = agno_agent.acontinue_run(
+                # Resume from the persisted run id. Passing the separately
+                # loaded RunOutput here makes Agno treat it as an in-memory
+                # continuation and can skip rebinding the approved tool to its
+                # live callable after a process/request boundary.
+                run_id=body.run_id,
+                requirements=run_output.requirements,
+                stream=True,
+                stream_events=True,
+                user_id=str(user.id),
+                session_id=agno_session_id,
+                dependencies=dependencies,
+            )
+            async for chunk in _with_keepalive(_serialize_events(events, model, str(user.id))):
+                yield chunk
+        except Exception as exc:
+            logger.error("confirmation_stream_failed", user_id=str(user.id), error=str(exc))
+            yield _chunk(model, extension={"type": "error", "message": "Confirmation failed"}, finish="stop")
+        finally:
+            heartbeat_stop.set()
+            await heartbeat
+            yield b"data: [DONE]\n\n"
+            await _finalize_turn(user.id, chat_session.id, lock_owner, None, lease=lease, increment=False)
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
+    )
+
+
+async def _finalize_turn(
+    user_id,
+    chat_session_id: str,
+    lock_owner: str,
+    first_user_text: str | None,
+    *,
+    lease=None,
+    increment: bool = True,
+) -> None:
+    if lease is not None:
+        await lease.release()
     async with SessionLocal() as db:
         agent = await manager.get_agent(db, user_id)
         if agent is not None:
@@ -218,7 +400,8 @@ async def _finalize_turn(user_id, chat_session_id: str, lock_owner: str, first_u
         result = await db.execute(select(ChatSession).where(ChatSession.id == chat_session_id))
         session_row = result.scalar_one_or_none()
         if session_row is not None:
-            session_row.message_count += 1
-            if not session_row.title:
+            if increment:
+                session_row.message_count += 1
+            if first_user_text and not session_row.title:
                 session_row.title = first_user_text[:80] or None
             await db.commit()

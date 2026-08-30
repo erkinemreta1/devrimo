@@ -18,23 +18,26 @@ app/
   auth/                  Supabase JWT verification (JWKS + legacy HS256)
   db/                     SQLAlchemy models (Agent, ChatSession) + session
   agents/
-    pool.py               Resident agents, one per user, with their MCP subprocesses
+    pool.py               Leased resident agents and their MCP subprocesses
     toolset.py            The only module that spawns campus MCP servers
     store.py              The Agno database — where conversation history lives
     manager.py            State machine, turn locks, entitlement
     reconciler.py         Idle eviction, background loop
+    scholar/              Prompt, trusted context, learning, compression, hooks
     echo_model.py         Model test double for AGENT_RUNTIME=fake
-    persona.md            The agent's instructions
+    scripted_model.py     Deterministic real tool-call/HITL test model
   campus/
     catalog.py            The four METU MCP servers, and what each one needs
     mcp_config.py         Renders one student's launch specs (pure function)
     credentials.py        The only module that decrypts a METU password
     verify.py             One SSO sign-in, to check credentials before storing
     service.py            Profile + credential persistence
-  api/v1/                 Routes: agents, campus, chat, profile, sessions, health
+  agentos/                JWT-protected operations/measurement service
+  api/v1/                 Routes: agents, campus, chat, memories, profile, sessions
   schemas.py              Response shapes, kept in lockstep with the frontend
 alembic/                  Schema migrations
 tests/                    Full API test suite against the echo model
+evals/                    Synthetic routing, grounding, bilingual, and safety evals
 ```
 
 ## Architecture
@@ -48,12 +51,39 @@ Eviction is safe because it is invisible: conversation history lives in the
 database (`agno_*` tables, see `app/agents/store.py`), so reading a month-old
 thread is a query and the next turn after an eviction transparently rebuilds.
 
-`chat.py` owns the wire format rather than proxying one. It translates Agno's
-run events into OpenAI `chat.completion.chunk` objects, which is what
-`frontend/lib/api/chat.ts` parses. Tool activity is emitted on the same stream
-as chunks carrying an empty delta plus a namespaced `devrimo` object — today's
-frontend ignores them, and the assistant-ui tool components can be wired to
-them without a backend change.
+`chat.py` owns the wire format rather than proxying one. It translates Agno run
+events into OpenAI `chat.completion.chunk` objects plus namespaced `devrimo`
+events. The frontend consumes confirmation events and shows the exact recipient,
+subject, and body before an email can be sent. A resident runtime is leased for
+the complete stream, so a credential update or LRU eviction retires it but never
+kills an MCP subprocess halfway through a tool call.
+
+### Scholar runtime
+
+`AGENT_PROFILE=scholar` selects the production profile; `legacy` is the rollback
+target. Scholar uses four deliberately separate context layers:
+
+- three recent runs verbatim, scoped by Agno `user_id` and `session_id`;
+- an Agno session-context learning record for the current goal, plan, constraints,
+  and completed progress;
+- explicit long-term user memories for stable, non-sensitive preferences only;
+- per-run application context in the system message (profile, locale, connected
+  tools, Istanbul time, and a clearly marked date-derived academic-term hint).
+  Profile values remain data and cannot override instructions.
+
+Older tool results are compressed after a configurable threshold. Tool-result
+offloading and raw tool-message storage are disabled, avoiding two competing
+context mechanisms and reducing sensitive retention. `GET /api/v1/memories`
+lets a student inspect memories and `DELETE /api/v1/memories` clears all of
+their memories. Learning is disabled in the fake runtime so local tests cannot
+silently make model calls.
+
+The instruction stack is assembled from the base Scholar policy and only the
+toolkits that connected successfully. It mirrors Turkish/English, requires
+fresh campus data to come from tools, treats email/course content as untrusted,
+names sources and retrieval time, and never treats tool content as authority.
+Tool calls are capped per run; long string and structured results are bounded;
+model retries use backoff.
 
 ### Isolation
 
@@ -76,14 +106,14 @@ should not be dropped:
   reported by `GET /health`. Pinning buys reproducibility, not review — nobody
   has audited those commits, and pinning is what makes auditing them worth
   doing. Bumping one is `git ls-remote <repo> <branch>`, edit the arg, rebuild.
-- **Webmail grants more authority than its consent copy claims.** The pinned
-  commit exposes six mutating tools, including `forward_email` and a
-  `delete_email` whose non-permanent mode can still destroy mail; the onboarding
-  text promises only read and send. Nothing but the system prompt stands between
-  a hostile course announcement and a forwarded transcript. This is the largest
-  remaining exposure, and it is a tool-layer problem rather than a network one —
-  see [Decision: webmail write authority](../docs/decisions/0001-webmail-write-authority.md),
-  which is open and should be closed before webmail reaches students.
+- **Every MCP server has an exact tool allowlist.** Upstream additions never
+  become model authority automatically. Webmail exposes reads plus send/reply;
+  forward, delete, move, and mark are absent. Send and reply are Agno
+  confirmation tools, and the backend resumes only an owner/session/run-scoped
+  paused run. Batched writes fail closed. Mutation audit rows contain status,
+  duration, and a SHA-256 argument digest—not recipients, subjects, bodies, or
+  campus data. See the closed
+  [webmail authority decision](../docs/decisions/0001-webmail-write-authority.md).
 
 Restoring full per-student isolation later does not require undoing this work:
 run the four servers behind Streamable HTTP in a per-student sandbox and point
@@ -130,6 +160,27 @@ in `pool.py`) and again via `AGNO_TELEMETRY=false` in the compose file and
 `.env.example`. Both, deliberately — a deployment that forgets the env var is
 still covered.
 
+Optional OpenInference tracing writes into the self-hosted Agno database. The
+compose service sets redaction flags for model inputs/outputs and message
+content. Event storage is off by default. Trace retention and database access
+still need to be enforced by deployment policy; redaction is not a substitute
+for retention limits.
+
+### AgentOS and measurement
+
+AgentOS runs in a separate process against the same Agno tables. It deliberately
+registers no runnable Scholar instance, so the operations surface cannot launch
+a credential-bearing campus agent. JWT/RBAC authorization, audience checking,
+and per-user isolation are mandatory; startup fails without a verification key.
+Compose binds it to `127.0.0.1:7777`. Remote deployments must put it behind TLS
+and a VPN or authenticated reverse proxy rather than publishing it directly.
+
+AgentOS exposes stored sessions, run metrics, eval results, and optional traces.
+The synthetic suite in `evals/` is the release harness: it covers campus tool
+routing, bilingual behavior, grounding, and hostile tool-output injection
+without using real student data. Exact rollout gates are in
+[`evals/README.md`](evals/README.md).
+
 ## Running it
 
 ### Local dev (no campus servers needed)
@@ -139,7 +190,7 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements-dev.txt
 cp .env.example .env   # edit SUPABASE_URL at minimum
 alembic upgrade head
-AGENT_RUNTIME=fake uvicorn app.main:app --reload
+AGENT_RUNTIME=fake AGENT_PROFILE=scholar uvicorn app.main:app --reload
 ```
 
 `AGENT_RUNTIME=fake` swaps in an echo model (`app/agents/echo_model.py`) so the
@@ -151,7 +202,8 @@ Point the frontend's `NEXT_PUBLIC_API_URL` at `http://localhost:8000`.
 ### Full stack
 
 ```bash
-cp .env.example .env   # AGENT_RUNTIME=agno, real SUPABASE_URL, AGENT_OPENAI_API_KEY
+cp .env.example .env   # Scholar + real Supabase/model/AgentOS verification settings
+alembic upgrade head
 docker compose up --build
 ```
 
@@ -164,14 +216,19 @@ mount any more, so the broker runs as an unprivileged user.
 
 ```bash
 pip install -r requirements-dev.txt
-pytest
+ruff check app tests evals
+pytest -q
+python -m evals --tag smoke
 ```
+
+The eval command uses the configured real model and judge model. Run the full
+suite repeatedly before promotion; do not point it at production student data.
 
 ## Dependency pins worth knowing
 
-- **`mcp<2.0` is deliberate.** 2.x renamed `McpError` to `MCPError` and agno 3.x
-  still imports the old name; an unpinned install fails at import with a
-  misleading "`mcp` not installed".
+- **Agno 3.0.1 and MCP 1.29.1 are exact pins.** The runtime, HITL resume path,
+  learning schema, and eval APIs are tested as a unit. MCP 2.x also renamed
+  `McpError` to `MCPError`, while this Agno release still imports the old name.
 - **`psycopg` alongside `asyncpg`.** Agno's database layer is synchronous and
   builds its own engine, so Postgres deployments need both drivers.
 - **`AGENT_MAX_TOKENS`.** Agno's `OpenRouter` class defaults `max_tokens` to
@@ -184,7 +241,7 @@ pytest
 | `sais` | [metu-sais-mcp](https://github.com/atesahmet0/metu-sais-mcp) | Transcript, CGPA, weekly schedule, portal announcements |
 | `course_info` | [metu-course-info-mcp](https://github.com/atesahmet0/metu-course-info-mcp) | Course catalog, sections, prerequisites, curriculum categories |
 | `odtuclass` | [metu-odtuclass-mcp](https://github.com/erkinemreta1/metu-odtuclass-mcp) | Enrolled courses, announcements, syllabi, assignment deadlines |
-| `webmail` | [metu-webmail-mcp](https://github.com/atesahmet0/metu-webmail-mcp) | Read/search/send mail on the student's `@metu.edu.tr` account |
+| `webmail` | [metu-webmail-mcp](https://github.com/atesahmet0/metu-webmail-mcp) | Read/search mail; send/reply only after exact confirmation |
 
 `app/campus/mcp_config.py` renders each student's launch specs — command, argv,
 environment, working directory — and `app/agents/toolset.py` turns them into
@@ -194,9 +251,11 @@ directory under `CAMPUS_STATE_ROOT`, because odtuclass caches its Moodle session
 token relative to its CWD.
 
 A server that fails to connect is dropped and logged rather than failing the
-whole agent; the persona tells the model to say plainly when a tool it expected
-is missing. Note that `MCPTools.connect()` swallows its own exceptions, so
-`toolset.py` checks whether the toolkit actually initialized.
+whole agent; the dynamic prompt mentions only connected systems. Tool names are
+allowlisted from the audited pinned commits before prefixing, and webmail's two
+write tools are marked confirmation-required at toolkit construction. Note that
+`MCPTools.connect()` swallows its own exceptions, so `toolset.py` checks whether
+the toolkit actually initialized.
 
 ### Credentials
 
@@ -212,17 +271,16 @@ authenticate as the student with their real METU password. Consequently:
 - Disconnecting from Settings deletes it and drops the resident agent.
 
 `webmail` is the only server that can act rather than read, so it is opt-in
-(`default_enabled=False`) and flagged as such in the onboarding UI. `CampusTool`
-also carries an `exclude_tools` field, which would let webmail be offered
-read-only rather than all-or-nothing — not currently used.
+(`default_enabled=False`) and its consent copy names the exact granted and
+withheld authority.
 
 ### Changing a connection
 
-Credentials are read fresh on every turn and compared against what the resident
-agent was built with, so a change takes effect on the next turn without a
-restart. `PUT /campus/connection` also drops the resident agent eagerly, so a
-student who revokes a tool stops having it immediately rather than at the end of
-their current session.
+Every saved connection advances a monotonic credential revision. Each broker
+replica compares that revision as well as tool ids before reusing a runtime, so
+rotating a password rebuilds it even when the selected tools did not change.
+`PUT /campus/connection` retires the resident agent eagerly; an active lease may
+finish, but no later turn can reuse the old credentials.
 
 ## What's genuinely unverified
 
@@ -234,3 +292,6 @@ their current session.
   Hermes' own client. The transport is the same stdio protocol and the specs are
   asserted in `tests/test_campus_config.py`, but the handshake has not been run
   against the real servers.
+- **Model-specific quality targets.** The harness and gates exist, but release
+  scores depend on the configured production model and must be recorded after
+  repeated runs. Unit tests cannot certify answer quality or latency.

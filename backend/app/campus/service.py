@@ -72,8 +72,15 @@ async def upsert_credential(
     """
     credential = await get_credential(db, user_id)
     if credential is None:
-        credential = CampusCredential(user_id=user_id, metu_username=metu_username, enabled_tools=[])
+        credential = CampusCredential(
+            user_id=user_id,
+            metu_username=metu_username,
+            enabled_tools=[],
+            credential_revision=1,
+        )
         db.add(credential)
+    else:
+        credential.credential_revision += 1
 
     credential.metu_username = metu_username
     if metu_password is not None:
@@ -135,3 +142,8 @@ async def campus_server_specs(db: AsyncSession, user_id: UUID) -> list[CampusSer
         mcp_root=settings.campus_mcp_root,
         state_root=settings.campus_state_root,
     )
+
+
+async def credential_revision(db: AsyncSession, user_id: UUID) -> int:
+    credential = await get_credential(db, user_id)
+    return credential.credential_revision if credential is not None else 0

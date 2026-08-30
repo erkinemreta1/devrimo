@@ -24,6 +24,7 @@ type ProductEventProperties = {
   };
   chat_response_completed: { duration_seconds: number };
   chat_response_error: { category: "busy" | "other"; duration_seconds: number | null };
+  agent_action_confirmation: { approved: boolean; tool: string };
   theme_changed: { theme: "light" | "dark" };
   language_changed: { locale: "tr" | "en" };
   onboarding_step_viewed: { step: "welcome" | "connect" | "tools" | "ready" };

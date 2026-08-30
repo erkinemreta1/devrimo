@@ -1,11 +1,11 @@
 # 0001 — What the webmail tool is allowed to do
 
-- **Status:** Open. Needs a call before webmail is offered to real students.
+- **Status:** Accepted and implemented.
 - **Raised:** 2026-08-30, out of the Agno migration review.
 - **Decides:** whether the model may mutate a student's mailbox, and under what
   confirmation.
 
-## Why this is open
+## Why this needed a decision
 
 The catalog describes webmail to students, verbatim, as:
 
@@ -44,9 +44,10 @@ Note that this is why the egress question in `README.md` does not help here:
 mail to and from METU hosts is exactly what any sane allowlist permits. This is
 a tool-authority problem, and it has to be solved at the tool layer.
 
-`persona.md` carries a prompt-injection guard. A prompt is a mitigation, not a
-control — it degrades under paraphrase, other languages, and long context, and
-we have no evaluation showing how well it holds.
+The Scholar prompt carries a prompt-injection guard, but a prompt is a
+mitigation rather than an authorization boundary. The allowlist and human
+confirmation below are the controls; the synthetic injection eval measures the
+prompt/tool harness as defense in depth.
 
 ## A bug found while writing this
 
@@ -79,19 +80,25 @@ implements one and the frontend does not yet consume those events at all.
 **D. Status quo.** Webmail is `default_enabled=False`, so a student must opt in.
 Opting in currently grants all twelve tools with no confirmation.
 
-## Recommendation
-
-**B now, C later, and fix the consent copy either way.**
-
-B is a `catalog.py` edit that removes the exfiltration primitive and the
-destructive bug today, while keeping the feature students would actually miss.
-C is the right end state and should be scheduled deliberately, not used as a
-reason to ship D in the meantime.
-
-Whatever is chosen, `scope_en` / `scope_tr` must describe the authority actually
-granted. If option B is taken, the copy should say the assistant can send and
-reply as the student and cannot delete, move, or forward mail.
-
 ## Decision
 
-_Unfilled._ Record the choice, the date, and who made it here.
+**B and C, implemented on 2026-08-30.** Webmail exposes its six read/search
+tools plus `send_email` and `reply_email`. `forward_email`, `delete_email`,
+`move_email`, and `mark_email` are absent from the model's exact allowlist.
+Both allowed writes require Agno human confirmation of the exact arguments.
+
+The pause can be resumed only through an authenticated endpoint that matches
+the student, local chat session, Agno run, and requirement. More than one
+pending external action in a run fails closed. Approval executes the original
+stored arguments; the client cannot replace them while approving. Rejections
+and executions receive content-free mutation audit rows containing a canonical
+argument digest, status, duration, and error class.
+
+The onboarding copy now states that the assistant may read/search and may
+send/reply only after exact approval, and that it cannot delete, move, mark, or
+forward mail. Webmail remains opt-in.
+
+Relevant controls live in `backend/app/campus/catalog.py`,
+`backend/app/agents/toolset.py`, `backend/app/api/v1/chat.py`, and the frontend
+confirmation dialog. The deterministic Agno harness proves that a write tool
+has zero side effects before approval and is audited after execution.

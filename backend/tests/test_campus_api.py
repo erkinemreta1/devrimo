@@ -6,11 +6,13 @@ particular way.
 """
 
 import pytest
+from sqlalchemy import select
 
 from app.agents.pool import get_pool
 from app.api.v1 import campus as campus_routes
 from app.campus import service as campus_service
 from app.campus.verify import VerificationResult
+from app.db.models import CampusCredential
 from app.db.session import SessionLocal
 from tests.conftest import auth_header, new_user_id
 
@@ -130,6 +132,28 @@ async def test_password_may_be_omitted_when_only_toggling_tools(client, accept_c
     assert body["has_password"] is True
     # The earlier verification carries forward rather than being reset.
     assert body["verified_at"] is not None
+
+
+async def test_every_saved_connection_advances_credential_revision(client, accept_credentials):
+    user_id = new_user_id()
+    headers = auth_header(user_id)
+    await client.put(
+        "/api/v1/campus/connection",
+        headers=headers,
+        json={"metu_username": "e123456", "metu_password": "first", "enabled_tools": ["sais"]},
+    )
+    async with SessionLocal() as db:
+        first = (await db.execute(select(CampusCredential).where(CampusCredential.user_id == user_id))).scalar_one()
+        assert first.credential_revision == 1
+
+    await client.put(
+        "/api/v1/campus/connection",
+        headers=headers,
+        json={"metu_username": "e123456", "metu_password": "second", "enabled_tools": ["sais"]},
+    )
+    async with SessionLocal() as db:
+        second = (await db.execute(select(CampusCredential).where(CampusCredential.user_id == user_id))).scalar_one()
+        assert second.credential_revision == 2
 
 
 async def test_first_connect_requires_a_password(client, accept_credentials):

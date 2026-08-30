@@ -27,6 +27,18 @@ _SESSION_TABLE = "agno_sessions"
 _RUNS_TABLE = "agno_runs"
 _MEMORY_TABLE = "agno_memories"
 _METRICS_TABLE = "agno_metrics"
+_EVAL_TABLE = "agno_eval_runs"
+_KNOWLEDGE_TABLE = "agno_knowledge"
+_TRACES_TABLE = "agno_traces"
+_SPANS_TABLE = "agno_spans"
+_VERSIONS_TABLE = "agno_schema_versions"
+_COMPONENTS_TABLE = "agno_components"
+_COMPONENT_CONFIGS_TABLE = "agno_component_configs"
+_COMPONENT_LINKS_TABLE = "agno_component_links"
+_LEARNINGS_TABLE = "agno_learnings"
+_SCHEDULES_TABLE = "agno_schedules"
+_SCHEDULE_RUNS_TABLE = "agno_schedule_runs"
+_APPROVALS_TABLE = "agno_approvals"
 
 
 def _sqlite_file(url: str) -> str:
@@ -48,10 +60,23 @@ def _sync_postgres_url(url: str) -> str:
 def get_agno_db() -> BaseDb:
     url = get_settings().database_url
     tables = {
+        "id": "devrimo-agno",
         "session_table": _SESSION_TABLE,
         "runs_table": _RUNS_TABLE,
         "memory_table": _MEMORY_TABLE,
         "metrics_table": _METRICS_TABLE,
+        "eval_table": _EVAL_TABLE,
+        "knowledge_table": _KNOWLEDGE_TABLE,
+        "traces_table": _TRACES_TABLE,
+        "spans_table": _SPANS_TABLE,
+        "versions_table": _VERSIONS_TABLE,
+        "components_table": _COMPONENTS_TABLE,
+        "component_configs_table": _COMPONENT_CONFIGS_TABLE,
+        "component_links_table": _COMPONENT_LINKS_TABLE,
+        "learnings_table": _LEARNINGS_TABLE,
+        "schedules_table": _SCHEDULES_TABLE,
+        "schedule_runs_table": _SCHEDULE_RUNS_TABLE,
+        "approvals_table": _APPROVALS_TABLE,
     }
 
     if url.startswith("sqlite"):

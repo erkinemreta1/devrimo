@@ -30,6 +30,12 @@ services:
       # belt. Agno otherwise posts run telemetry to os-api.agno.com, and these
       # runs are students' campus conversations.
       AGNO_TELEMETRY: "false"
+      # Trace payloads remain in our database, but production spans still hide
+      # user/model text and tool inputs/outputs as a privacy boundary.
+      OPENINFERENCE_HIDE_INPUTS: "true"
+      OPENINFERENCE_HIDE_OUTPUTS: "true"
+      OPENINFERENCE_HIDE_INPUT_MESSAGES: "true"
+      OPENINFERENCE_HIDE_OUTPUT_MESSAGES: "true"
     ports:
       - "8000:8000"
     depends_on:
@@ -54,6 +60,29 @@ services:
     # No Docker socket. The broker no longer creates containers, which removes
     # the host-root-equivalent mount this file used to carry — and lets the
     # image drop to an unprivileged user (see Dockerfile).
+
+  agentos:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    command: ["python", "-m", "app.agentos.main"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://devrimo:devrimo@postgres:5432/devrimo
+      AGENTOS_ENABLED: "true"
+      AGENTOS_HOST: "0.0.0.0"
+      AGNO_TELEMETRY: "false"
+    ports:
+      # Host-only by default. Put this behind authenticated TLS/VPN when the
+      # operations UI must reach a remote deployment.
+      - "127.0.0.1:7777:7777"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - devrimo-internal
+    security_opt:
+      - no-new-privileges
 
 networks:
   devrimo-internal:

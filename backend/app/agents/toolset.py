@@ -28,6 +28,13 @@ from app.logging import get_logger
 
 logger = get_logger(__name__)
 
+TOOLKIT_INSTRUCTIONS = {
+    "sais": "Use for the student's private schedule, transcript, CGPA, and SAIS announcements.",
+    "course_info": "Use for official catalog, prerequisite, replacement, and curriculum questions.",
+    "odtuclass": "Use for enrolled-course announcements, syllabi, labs, and assignment deadlines.",
+    "webmail": "Use only for explicit mail requests; send and reply always require confirmation.",
+}
+
 
 def _prepare_working_dir(path: str) -> bool:
     """Create this server's private working directory. False if we cannot.
@@ -79,7 +86,10 @@ def build_toolkits(specs: list[CampusServerSpec], *, timeout_seconds: int) -> li
                 # generic names (``search``, ``list_courses``); without this a
                 # collision would shadow one server's tool with another's.
                 tool_name_prefix=spec.tool_id,
-                exclude_tools=list(spec.exclude_tools) or None,
+                include_tools=list(spec.include_tools) or None,
+                requires_confirmation_tools=list(spec.requires_confirmation_tools),
+                instructions=TOOLKIT_INSTRUCTIONS.get(spec.tool_id),
+                add_instructions=True,
             )
         )
     return toolkits

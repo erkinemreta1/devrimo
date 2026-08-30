@@ -34,7 +34,8 @@ class CampusServerSpec:
     # :meth:`describe`.
     env: dict[str, str] = field(default_factory=dict)
     cwd: str | None = None
-    exclude_tools: tuple[str, ...] = ()
+    include_tools: tuple[str, ...] = ()
+    requires_confirmation_tools: tuple[str, ...] = ()
 
     def __repr__(self) -> str:  # pragma: no cover - defensive, not behaviour
         return f"CampusServerSpec(tool_id={self.tool_id!r}, env_keys={sorted(self.env)}, ...redacted)"
@@ -106,7 +107,8 @@ def build_server_specs(
                 args=tuple(arg.format(venv_root=venv_root) for arg in tool.args),
                 env=_render_env(tool, values),
                 cwd=state_dir_for(state_root, user_id, tool),
-                exclude_tools=tool.exclude_tools,
+                include_tools=tool.include_tools,
+                requires_confirmation_tools=tool.requires_confirmation_tools,
             )
         )
     return specs

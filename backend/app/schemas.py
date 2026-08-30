@@ -47,6 +47,13 @@ class ChatCompletionsRequestIn(BaseModel):
     model: str | None = None
 
 
+class ChatConfirmationIn(BaseModel):
+    run_id: str = Field(min_length=1, max_length=255)
+    session_id: str = Field(min_length=1, max_length=64)
+    requirement_id: str = Field(min_length=1, max_length=255)
+    approved: bool
+
+
 class ChatMessageOut(BaseModel):
     role: str
     content: str
@@ -70,6 +77,15 @@ class ChatSessionListOut(BaseModel):
 
 class ChatSessionDetailOut(ChatSessionOut):
     messages: list[ChatMessageOut]
+
+
+class MemoryEntryOut(BaseModel):
+    id: str
+    content: str
+
+
+class MemoryListOut(BaseModel):
+    memories: list[MemoryEntryOut] = Field(default_factory=list)
 
 
 # --- Campus MCP tools ---------------------------------------------------

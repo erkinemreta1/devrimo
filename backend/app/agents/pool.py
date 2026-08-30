@@ -23,65 +23,18 @@ import asyncio
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from pathlib import Path
 from uuid import UUID
 
 from agno.agent import Agent
-from agno.models.base import Model
 from agno.tools.mcp import MCPTools
 
-from app.agents.store import get_agno_db
+from app.agents.builders import build_agent
 from app.agents.toolset import build_toolkits, close_toolkits, connect_toolkits
 from app.campus.mcp_config import CampusServerSpec
 from app.config import get_settings
 from app.logging import get_logger
 
 logger = get_logger(__name__)
-
-_PERSONA_PATH = Path(__file__).with_name("persona.md")
-
-
-def load_persona() -> str:
-    return _PERSONA_PATH.read_text(encoding="utf-8")
-
-
-def build_model() -> Model:
-    settings = get_settings()
-    if settings.agent_runtime == "fake":
-        from app.agents.echo_model import EchoModel
-
-        return EchoModel()
-
-    base_url = (settings.agent_openai_base_url or "").lower()
-    # OpenCode Go / OpenAI Responses API endpoints (e.g. muse-spark-1.2-contributor)
-    if "opencode.ai" in base_url or settings.agent_model == "muse-spark-1.2-contributor":
-        from agno.models.openai import OpenAIResponses
-
-        return OpenAIResponses(
-            id=settings.agent_model,
-            api_key=settings.agent_openai_api_key,
-            base_url=settings.agent_openai_base_url,
-            max_output_tokens=settings.agent_max_tokens,
-        )
-
-    if "openrouter.ai" in base_url:
-        from agno.models.openrouter import OpenRouter
-
-        return OpenRouter(
-            id=settings.agent_model,
-            api_key=settings.agent_openai_api_key,
-            base_url=settings.agent_openai_base_url,
-            max_tokens=settings.agent_max_tokens,
-        )
-
-    from agno.models.openai import OpenAIChat
-
-    return OpenAIChat(
-        id=settings.agent_model,
-        api_key=settings.agent_openai_api_key,
-        base_url=settings.agent_openai_base_url,
-        max_tokens=settings.agent_max_tokens,
-    )
 
 
 @dataclass
@@ -95,11 +48,34 @@ class ResidentAgent:
     # the student's current selection to notice a toolset that went stale
     # while the agent was resident.
     tool_ids: tuple[str, ...] = ()
+    credential_revision: int = 0
+    active_leases: int = 0
+    retired: bool = False
+    closed: bool = False
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     last_used_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     def touch(self) -> None:
         self.last_used_at = datetime.now(UTC)
+
+
+@dataclass
+class ResidentLease:
+    """Keeps credential-bearing MCP subprocesses alive for one streamed turn."""
+
+    pool: "AgentPool"
+    resident: ResidentAgent
+    released: bool = False
+
+    @property
+    def agent(self) -> Agent:
+        return self.resident.agent
+
+    async def release(self) -> None:
+        if self.released:
+            return
+        self.released = True
+        await self.pool.release(self.resident)
 
 
 class AgentPool:
@@ -113,13 +89,15 @@ class AgentPool:
         async with self._registry_lock:
             return self._locks.setdefault(user_id, asyncio.Lock())
 
-    async def acquire(self, user_id: UUID, specs: list[CampusServerSpec]) -> ResidentAgent:
+    async def acquire(
+        self, user_id: UUID, specs: list[CampusServerSpec], *, credential_revision: int = 0
+    ) -> ResidentAgent:
         """The user's live agent, building it if it isn't resident or is stale."""
         wanted = tuple(spec.tool_id for spec in specs)
         lock = await self._lock_for(user_id)
         async with lock:
             entry = self._entries.get(user_id)
-            if entry is not None and entry.tool_ids == wanted:
+            if entry is not None and entry.tool_ids == wanted and entry.credential_revision == credential_revision:
                 entry.touch()
                 self._entries.move_to_end(user_id)
                 return entry
@@ -130,50 +108,76 @@ class AgentPool:
                 logger.info("agent_toolset_changed", user_id=str(user_id), was=entry.tool_ids, now=wanted)
                 await self._discard(user_id)
 
-            entry = await self._build(user_id, specs, wanted)
+            entry = await self._build(user_id, specs, wanted, credential_revision)
             self._entries[user_id] = entry
             self._entries.move_to_end(user_id)
 
         await self._enforce_capacity()
         return entry
 
-    async def _build(self, user_id: UUID, specs: list[CampusServerSpec], wanted: tuple[str, ...]) -> ResidentAgent:
+    async def lease(
+        self, user_id: UUID, specs: list[CampusServerSpec], *, credential_revision: int = 0
+    ) -> ResidentLease:
+        """Acquire a runtime lease that eviction and reconfiguration must respect."""
+        while True:
+            entry = await self.acquire(user_id, specs, credential_revision=credential_revision)
+            lock = await self._lock_for(user_id)
+            async with lock:
+                # The entry may have been retired by a concurrent capacity or
+                # credential invalidation between acquire() and this lock.
+                if self._entries.get(user_id) is not entry or entry.retired:
+                    continue
+                entry.active_leases += 1
+                entry.touch()
+                return ResidentLease(pool=self, resident=entry)
+
+    async def release(self, entry: ResidentAgent) -> None:
+        lock = await self._lock_for(entry.user_id)
+        async with lock:
+            if entry.active_leases > 0:
+                entry.active_leases -= 1
+            if entry.retired and entry.active_leases == 0:
+                await self._close_entry(entry)
+
+    async def _build(
+        self,
+        user_id: UUID,
+        specs: list[CampusServerSpec],
+        wanted: tuple[str, ...],
+        credential_revision: int,
+    ) -> ResidentAgent:
         settings = get_settings()
         toolkits = build_toolkits(specs, timeout_seconds=settings.campus_mcp_timeout_seconds)
         connected = await connect_toolkits(toolkits)
 
-        agent = Agent(
-            # Stable across rebuilds so Agno's stored sessions keep resolving
-            # to the same agent after an eviction.
-            id=f"devrimo-campus-{user_id}",
-            name="Devrimo Campus Agent",
-            model=build_model(),
-            db=get_agno_db(),
-            tools=list(connected),
-            instructions=load_persona(),
-            add_history_to_context=True,
-            num_history_runs=settings.agent_history_runs,
-            add_datetime_to_context=True,
-            markdown=True,
-            # Agno posts run telemetry to os-api.agno.com by default. This
-            # agent's runs are a student's campus conversations, so that is
-            # switched off here rather than left to an env var a deployment
-            # might forget. AGNO_TELEMETRY=false is set in the compose file too.
-            telemetry=False,
-        )
+        agent = build_agent(user_id, connected)
         logger.info(
             "agent_built",
             user_id=str(user_id),
             requested_tools=wanted,
             connected_tools=tuple(t.name for t in connected),
         )
-        return ResidentAgent(user_id=user_id, agent=agent, toolkits=connected, tool_ids=wanted)
+        return ResidentAgent(
+            user_id=user_id,
+            agent=agent,
+            toolkits=connected,
+            tool_ids=wanted,
+            credential_revision=credential_revision,
+        )
 
     async def _discard(self, user_id: UUID) -> None:
         """Drop an entry and close its subprocesses. Caller holds the user's lock."""
         entry = self._entries.pop(user_id, None)
         if entry is None:
             return
+        entry.retired = True
+        if entry.active_leases == 0:
+            await self._close_entry(entry)
+
+    async def _close_entry(self, entry: ResidentAgent) -> None:
+        if entry.closed:
+            return
+        entry.closed = True
         await close_toolkits(entry.toolkits)
 
     async def _enforce_capacity(self) -> None:

@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1 import agents, campus, chat, health, profile, sessions
+from app.api.v1 import agents, campus, chat, health, memories, profile, sessions
 
 router = APIRouter()
 router.include_router(health.router, tags=["health"])
@@ -9,3 +9,4 @@ router.include_router(chat.router, prefix="/chat", tags=["chat"])
 router.include_router(sessions.router, prefix="/chat/sessions", tags=["sessions"])
 router.include_router(profile.router, prefix="/profile", tags=["profile"])
 router.include_router(campus.router, prefix="/campus", tags=["campus"])
+router.include_router(memories.router, prefix="/memories", tags=["memories"])

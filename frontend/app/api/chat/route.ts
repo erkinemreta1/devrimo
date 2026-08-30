@@ -40,12 +40,16 @@ export async function POST(request: Request) {
     execute: async ({ writer }) => {
       writer.write({ type: "text-start", id: textId });
       try {
-        for await (const delta of streamChatCompletions(result.auth.accessToken, {
+        for await (const event of streamChatCompletions(result.auth.accessToken, {
           messages,
           client_id: clientId,
           stream: true,
         })) {
-          writer.write({ type: "text-delta", id: textId, delta });
+          if (event.type === "text") {
+            writer.write({ type: "text-delta", id: textId, delta: event.delta });
+          } else {
+            writer.write({ type: "data-confirmation", data: event.confirmation });
+          }
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : "Chat failed";

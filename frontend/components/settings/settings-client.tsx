@@ -20,11 +20,13 @@ import {
 import { useLocale } from "@/components/locale-provider";
 import { CampusConnectionCard } from "@/components/settings/campus-connection-card";
 import { useProfile } from "@/hooks/useProfile";
+import { useMemories } from "@/hooks/useMemories";
 
 export function SettingsClient() {
   const { pick } = useLocale();
   const { agent, isLoading, ensureRunning, stop, destroy, refetch } = useAgent();
   const { update: updateProfile } = useProfile();
+  const { memories, isLoading: memoriesLoading, clear: clearMemories } = useMemories();
 
   async function run(action: () => Promise<unknown>, success: string) {
     try {
@@ -44,6 +46,73 @@ export function SettingsClient() {
       </div>
 
       <CampusConnectionCard />
+
+      <Card className="motion-enter [animation-delay:60ms]">
+        <CardHeader>
+          <CardTitle>{pick({ tr: "Hatırlanan tercihler", en: "Remembered preferences" })}</CardTitle>
+          <CardDescription>
+            {pick({
+              tr: "Asistan yalnızca açıkça hatırlamasını istediğin, hassas olmayan kalıcı tercihleri burada tutar.",
+              en: "The assistant keeps only durable, non-sensitive preferences you explicitly asked it to remember.",
+            })}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          {memoriesLoading ? (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2Icon className="size-4 animate-spin" />
+              {pick({ tr: "Tercihler yükleniyor…", en: "Loading preferences…" })}
+            </div>
+          ) : memories.length ? (
+            <ul className="space-y-2 text-sm">
+              {memories.map((memory) => (
+                <li key={memory.id} className="rounded-lg border bg-muted/30 px-3 py-2">
+                  {memory.content}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              {pick({ tr: "Kayıtlı bir tercih yok.", en: "No preferences are saved." })}
+            </p>
+          )}
+          {memories.length ? (
+            <AlertDialog>
+              <AlertDialogTrigger render={<Button variant="outline" className="self-start" />}>
+                {pick({ tr: "Tümünü unut", en: "Forget all" })}
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>
+                    {pick({ tr: "Tüm tercihler unutulsun mu?", en: "Forget all preferences?" })}
+                  </AlertDialogTitle>
+                  <AlertDialogDescription>
+                    {pick({
+                      tr: "Bu işlem kayıtlı asistan tercihlerini kalıcı olarak siler; sohbet geçmişini silmez.",
+                      en: "This permanently clears saved assistant preferences, but does not delete chat history.",
+                    })}
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>{pick({ tr: "Vazgeç", en: "Cancel" })}</AlertDialogCancel>
+                  <AlertDialogAction
+                    disabled={clearMemories.isPending}
+                    onClick={() =>
+                      run(
+                        () => clearMemories.mutateAsync(),
+                        pick({ tr: "Kayıtlı tercihler silindi.", en: "Saved preferences cleared." }),
+                      )
+                    }
+                  >
+                    {clearMemories.isPending ? <Loader2Icon className="animate-spin" /> : null}
+                    {pick({ tr: "Tümünü unut", en: "Forget all" })}
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          ) : null}
+        </CardContent>
+      </Card>
 
       <Card className="motion-enter [animation-delay:90ms]">
         <CardHeader>

@@ -14,8 +14,10 @@ structlog>=24.4,<25.0
 # Agent framework. `mcp` is pinned below 2.0 deliberately: 2.x renamed
 # McpError -> MCPError and agno 3.x still imports the old name, so an
 # unpinned install fails at import with a misleading "`mcp` not installed".
-agno>=3.0,<4.0
-mcp>=1.9,<2.0
+agno==3.0.1
+mcp==1.29.1
+opentelemetry-sdk>=1.28,<2.0
+openinference-instrumentation-agno>=0.1,<1.0
 openai>=1.60,<4.0
 # Agno's database layer is synchronous and builds its own engine, so Postgres
 # deployments need the sync driver alongside asyncpg.

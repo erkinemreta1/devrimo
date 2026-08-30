@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { AssistantRuntimeProvider } from "@assistant-ui/react";
 import { AssistantChatTransport, useChatRuntime } from "@assistant-ui/ai-sdk";
-import type { UIMessage } from "ai";
+import type { DataUIPart, UIMessage } from "ai";
 import { toast } from "sonner";
 import { Thread } from "@/components/thread.aui";
 import { SessionSidebar } from "@/components/chat/session-sidebar";
@@ -22,6 +22,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { captureProductEvent } from "@/components/posthog-analytics";
+import type { ChatConfirmation } from "@/lib/api/chat";
 
 function toUiMessages(sessionId: string, messages: { role: string; content: string; id?: string }[]): UIMessage[] {
   return messages.map((message, index) => ({
@@ -71,6 +72,9 @@ function AssistantThread({
   onThreadReady: (id: string | undefined) => void;
 }) {
   const [telemetry] = useState(() => new ChatTelemetry());
+  const [pendingConfirmation, setPendingConfirmation] = useState<ChatConfirmation | null>(null);
+  const [confirmationPending, setConfirmationPending] = useState(false);
+  const { pick } = useLocale();
 
   const runtime = useChatRuntime({
     id: threadId,
@@ -81,6 +85,10 @@ function AssistantThread({
       captureProductEvent("chat_response_completed", {
         duration_seconds: telemetry.finishDuration() ?? 0,
       });
+    },
+    onData: (part: DataUIPart<Record<string, unknown>>) => {
+      if (part.type !== "data-confirmation") return;
+      setPendingConfirmation(part.data as ChatConfirmation);
     },
     onError: (error) => {
       const message = error instanceof Error ? error.message : "Chat failed";
@@ -97,10 +105,82 @@ function AssistantThread({
     },
   });
 
+  const requirement = pendingConfirmation?.requirements[0];
+
+  async function resolveConfirmation(approved: boolean) {
+    if (!pendingConfirmation || !requirement || confirmationPending) return;
+    setConfirmationPending(true);
+    try {
+      const response = await fetch("/api/chat/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          confirmation: pendingConfirmation,
+          requirement_id: requirement.id,
+          approved,
+        }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as {
+        text?: string;
+        confirmation?: ChatConfirmation | null;
+        detail?: string;
+      };
+      if (!response.ok) throw new Error(payload.detail || "Confirmation failed");
+      const continuationText =
+        payload.text ||
+        (!payload.confirmation
+          ? approved
+            ? pick({ tr: "İşlem tamamlandı.", en: "The action was completed." })
+            : pick({ tr: "İşlem iptal edildi.", en: "The action was cancelled." })
+          : "");
+      if (continuationText) {
+        runtime.thread.append({
+          role: "assistant",
+          content: [{ type: "text", text: continuationText }],
+        });
+      }
+      setPendingConfirmation(payload.confirmation ?? null);
+      captureProductEvent("agent_action_confirmation", { approved, tool: requirement.tool });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Confirmation failed");
+    } finally {
+      setConfirmationPending(false);
+    }
+  }
+
   return (
-    <AssistantRuntimeProvider runtime={runtime}>
-      <Thread />
-    </AssistantRuntimeProvider>
+    <>
+      <AssistantRuntimeProvider runtime={runtime}>
+        <Thread />
+      </AssistantRuntimeProvider>
+      <AlertDialog open={Boolean(pendingConfirmation)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {pick({ tr: "Bu e-posta gönderilsin mi?", en: "Send this email?" })}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {pick({
+                tr: "Göndermeden önce alıcıyı, konuyu ve iletiyi dikkatlice kontrol et.",
+                en: "Review the recipient, subject, and message carefully before sending.",
+              })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <pre className="max-h-72 overflow-auto whitespace-pre-wrap rounded-lg bg-muted p-3 text-xs">
+            {JSON.stringify(requirement?.arguments ?? {}, null, 2)}
+          </pre>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={confirmationPending} onClick={() => void resolveConfirmation(false)}>
+              {pick({ tr: "Reddet", en: "Reject" })}
+            </AlertDialogCancel>
+            <AlertDialogAction disabled={confirmationPending} onClick={() => void resolveConfirmation(true)}>
+              {confirmationPending ? <Loader2Icon className="animate-spin" /> : null}
+              {pick({ tr: "Onayla ve gönder", en: "Approve and send" })}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 }
 

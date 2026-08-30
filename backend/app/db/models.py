@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, Enum, ForeignKey, Integer, LargeBinary, String, Text, func
+from sqlalchemy import JSON, Boolean, DateTime, Enum, ForeignKey, Index, Integer, LargeBinary, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -135,8 +135,32 @@ class CampusCredential(Base):
     # been rebuilt with the new toolset. Lets the UI say "restart to apply"
     # instead of silently serving a stale toolset.
     config_dirty: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # Monotonic generation checked by every broker replica. Tool ids alone do
+    # not change when a password or token is rotated, so they cannot be used as
+    # a cache key for credential-bearing MCP subprocesses.
+    credential_revision: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+
+
+class AgentToolAudit(Base):
+    """Minimal audit trail for external mutations; never stores message bodies."""
+
+    __tablename__ = "agent_tool_audit"
+    __table_args__ = (Index("ix_agent_tool_audit_user_created", "user_id", "created_at"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(index=True, nullable=False)
+    session_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    run_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    tool_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    # SHA-256 of canonicalized arguments supports incident correlation without
+    # retaining recipients, subjects, bodies, or campus records.
+    argument_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    duration_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    error_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

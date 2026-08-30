@@ -24,14 +24,13 @@ from fastapi import HTTPException, status
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agents.pool import ResidentAgent, get_pool
+from app.agents.pool import ResidentAgent, ResidentLease, get_pool
 from app.campus import service as campus_service
+from app.config import get_settings
 from app.db.models import Agent, AgentStatus
 from app.logging import get_logger
 
 logger = get_logger(__name__)
-
-TURN_LOCK_LEASE_SECONDS = 180
 
 
 async def get_agent(db: AsyncSession, user_id: UUID) -> Agent | None:
@@ -77,8 +76,13 @@ async def resident_for(db: AsyncSession, agent: Agent) -> ResidentAgent:
     against what the resident agent was built with and rebuilds on a mismatch.
     """
     specs = await campus_service.campus_server_specs(db, agent.user_id)
+    credential_revision = await campus_service.credential_revision(db, agent.user_id)
     try:
-        resident = await get_pool().acquire(agent.user_id, specs)
+        resident = await get_pool().acquire(
+            agent.user_id,
+            specs,
+            credential_revision=credential_revision,
+        )
     except Exception as exc:
         agent.status = AgentStatus.error
         agent.error_detail = str(exc)
@@ -92,6 +96,31 @@ async def resident_for(db: AsyncSession, agent: Agent) -> ResidentAgent:
         await db.commit()
     await campus_service.mark_config_applied(db, agent.user_id)
     return resident
+
+
+async def lease_for(db: AsyncSession, agent: Agent) -> ResidentLease:
+    """Bring up this user's runtime and hold it for the complete streamed turn."""
+    specs = await campus_service.campus_server_specs(db, agent.user_id)
+    credential_revision = await campus_service.credential_revision(db, agent.user_id)
+    try:
+        lease = await get_pool().lease(
+            agent.user_id,
+            specs,
+            credential_revision=credential_revision,
+        )
+    except Exception as exc:
+        agent.status = AgentStatus.error
+        agent.error_detail = str(exc)
+        await db.commit()
+        logger.error("agent_build_failed", user_id=str(agent.user_id), error=str(exc))
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Could not start agent: {exc}") from exc
+
+    if agent.status != AgentStatus.running or agent.error_detail:
+        agent.status = AgentStatus.running
+        agent.error_detail = None
+        await db.commit()
+    await campus_service.mark_config_applied(db, agent.user_id)
+    return lease
 
 
 def agno_agent_for(resident: ResidentAgent) -> AgnoAgent:
@@ -160,7 +189,7 @@ async def apply_campus_config(db: AsyncSession, agent: Agent) -> Agent:
 
 async def acquire_turn_lock(db: AsyncSession, agent: Agent, owner: str) -> bool:
     now = datetime.now(UTC)
-    lease_until = now + timedelta(seconds=TURN_LOCK_LEASE_SECONDS)
+    lease_until = now + timedelta(seconds=get_settings().turn_lock_lease_seconds)
 
     result = await db.execute(
         update(Agent)
@@ -169,6 +198,19 @@ async def acquire_turn_lock(db: AsyncSession, agent: Agent, owner: str) -> bool:
             (Agent.turn_lock_until.is_(None)) | (Agent.turn_lock_until < now),
         )
         .values(turn_lock_until=lease_until, turn_lock_owner=owner)
+        .execution_options(synchronize_session=False)
+    )
+    await db.commit()
+    return result.rowcount > 0
+
+
+async def renew_turn_lock(db: AsyncSession, agent_id, owner: str) -> bool:
+    """Extend a live turn lease without allowing a former owner to reclaim it."""
+    lease_until = datetime.now(UTC) + timedelta(seconds=get_settings().turn_lock_lease_seconds)
+    result = await db.execute(
+        update(Agent)
+        .where(Agent.id == agent_id, Agent.turn_lock_owner == owner)
+        .values(turn_lock_until=lease_until)
         .execution_options(synchronize_session=False)
     )
     await db.commit()

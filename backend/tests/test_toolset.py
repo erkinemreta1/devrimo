@@ -22,7 +22,24 @@ def spec(tool_id: str, cwd: str | None) -> CampusServerSpec:
         args=("-m", f"{tool_id}_mcp"),
         env={"METU_PASSWORD": "hunter2"},
         cwd=cwd,
+        include_tools=("read",),
     )
+
+
+def test_allowlist_and_confirmation_policy_reach_mcp_tools(tmp_path):
+    rendered = CampusServerSpec(
+        tool_id="webmail",
+        command="/opt/mcp/webmail/.venv/bin/python",
+        args=("-m", "metu_webmail_mcp"),
+        cwd=str(tmp_path / "webmail"),
+        include_tools=("read_email", "send_email"),
+        requires_confirmation_tools=("send_email",),
+    )
+
+    toolkit = build_toolkits([rendered], timeout_seconds=TIMEOUT)[0]
+
+    assert toolkit.include_tools == ["read_email", "send_email"]
+    assert toolkit.requires_confirmation_tools == ["send_email"]
 
 
 def test_creates_the_working_directory_private(tmp_path):
