@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { AssistantRuntimeProvider } from "@assistant-ui/react";
 import { AssistantChatTransport, useChatRuntime } from "@assistant-ui/ai-sdk";
 import type { UIMessage } from "ai";
@@ -21,6 +21,7 @@ import {
   AlertDialogMedia,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { captureProductEvent } from "@/components/posthog-analytics";
 
 function toUiMessages(sessionId: string, messages: { role: string; content: string; id?: string }[]): UIMessage[] {
   return messages.map((message, index) => ({
@@ -28,6 +29,36 @@ function toUiMessages(sessionId: string, messages: { role: string; content: stri
     role: message.role as UIMessage["role"],
     parts: [{ type: "text", text: message.content }],
   }));
+}
+
+class ChatTelemetry {
+  private requestStartedAt: number | null = null;
+
+  readonly transport = new AssistantChatTransport({
+    api: "/api/chat",
+    prepareSendMessagesRequest: ({ id, messages }) => {
+      const latestMessage = messages.at(-1);
+      const textLength = latestMessage?.parts.reduce(
+        (total, part) => total + (part.type === "text" ? part.text.length : 0),
+        0,
+      ) ?? 0;
+      const attachmentCount = latestMessage?.parts.filter((part) => part.type === "file").length ?? 0;
+      this.requestStartedAt = Date.now();
+      captureProductEvent("chat_message_sent", {
+        conversation_type: id ? "existing" : "new",
+        message_position: messages.length,
+        text_length: textLength,
+        attachment_count: attachmentCount,
+      });
+      return { body: { id, messages } };
+    },
+  });
+
+  finishDuration() {
+    const startedAt = this.requestStartedAt;
+    this.requestStartedAt = null;
+    return startedAt ? Math.max(0, Math.round((Date.now() - startedAt) / 1000)) : null;
+  }
 }
 
 function AssistantThread({
@@ -39,29 +70,27 @@ function AssistantThread({
   initialMessages?: UIMessage[];
   onThreadReady: (id: string | undefined) => void;
 }) {
-  const transport = useMemo(
-    () =>
-      new AssistantChatTransport({
-        api: "/api/chat",
-        prepareSendMessagesRequest: ({ id, messages }) => ({
-          body: {
-            id,
-            messages,
-          },
-        }),
-      }),
-    [],
-  );
+  const [telemetry] = useState(() => new ChatTelemetry());
 
   const runtime = useChatRuntime({
     id: threadId,
     messages: initialMessages,
-    transport,
+    transport: telemetry.transport,
     onThreadIdChange: onThreadReady,
+    onFinish: () => {
+      captureProductEvent("chat_response_completed", {
+        duration_seconds: telemetry.finishDuration() ?? 0,
+      });
+    },
     onError: (error) => {
       const message = error instanceof Error ? error.message : "Chat failed";
+      const busy = message.includes("409") || message.toLowerCase().includes("busy");
+      captureProductEvent("chat_response_error", {
+        category: busy ? "busy" : "other",
+        duration_seconds: telemetry.finishDuration(),
+      });
       toast.error(
-        message.includes("409") || message.toLowerCase().includes("busy")
+        busy
           ? "Your agent is answering another message. Please wait."
           : message,
       );
@@ -79,6 +108,7 @@ export function ChatShell() {
   const { pick } = useLocale();
   const { sessions, remove, refetch } = useChatSessions();
   const [threadId, setThreadId] = useState<string | undefined>(undefined);
+  const [selectedSessionId, setSelectedSessionId] = useState<string | undefined>(undefined);
   const [seedMessages, setSeedMessages] = useState<UIMessage[] | undefined>(undefined);
   const [chatKey, setChatKey] = useState(0);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
@@ -89,7 +119,9 @@ export function ChatShell() {
       const history = await loadSessionMessages(sessionId);
       setSeedMessages(toUiMessages(sessionId, history));
       setThreadId(sessionId);
+      setSelectedSessionId(sessionId);
       setChatKey((value) => value + 1);
+      captureProductEvent("chat_opened", { source: "history" });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not load session");
     }
@@ -98,14 +130,22 @@ export function ChatShell() {
   function newChat() {
     setSeedMessages([]);
     setThreadId(undefined);
+    setSelectedSessionId(undefined);
     setChatKey((value) => value + 1);
+  }
+
+  function startNewChat() {
+    captureProductEvent("chat_new_clicked", {});
+    newChat();
   }
 
   async function deleteSession(sessionId: string) {
     try {
+      const wasActive = selectedSessionId === sessionId;
       await remove.mutateAsync(sessionId);
-      if (threadId === sessionId) newChat();
+      if (wasActive) newChat();
       setPendingDeleteId(null);
+      captureProductEvent("chat_deleted", { was_active: wasActive });
       toast.success(pick({ tr: "Sohbet silindi.", en: "Chat deleted." }));
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not delete session");
@@ -116,10 +156,15 @@ export function ChatShell() {
     <div className="flex h-full min-h-0">
       <SessionSidebar
         sessions={sessions}
-        activeId={threadId}
-        onNewChat={newChat}
+        activeId={selectedSessionId}
+        onNewChat={startNewChat}
         onSelect={selectSession}
-        onDelete={setPendingDeleteId}
+        onDelete={(sessionId) => {
+          captureProductEvent("chat_delete_requested", {
+            was_active: selectedSessionId === sessionId,
+          });
+          setPendingDeleteId(sessionId);
+        }}
       />
       <div className="min-w-0 flex-1">
         <AssistantThread
@@ -128,6 +173,7 @@ export function ChatShell() {
           initialMessages={seedMessages}
           onThreadReady={(nextId) => {
             setThreadId(nextId);
+            if (!selectedSessionId && nextId) setSelectedSessionId(nextId);
             void refetch();
           }}
         />

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ArrowLeftIcon,
   ArrowRightIcon,
@@ -20,6 +20,7 @@ import { CampusToolToggle } from "@/components/onboarding/campus-tool-toggle";
 import { StepIndicator } from "@/components/onboarding/step-indicator";
 import { ONBOARDING_STEPS, stepIndex, type OnboardingStep } from "@/components/onboarding/steps";
 import type { CampusTool } from "@/lib/types";
+import { captureProductEvent } from "@/components/posthog-analytics";
 
 const STARTER_PROMPTS = {
   tr: [
@@ -79,6 +80,10 @@ export function OnboardingFlow({ onDone }: { onDone?: () => void }) {
   const index = ONBOARDING_STEPS.indexOf(step);
   const busy = connect.isPending || update.isPending;
 
+  useEffect(() => {
+    captureProductEvent("onboarding_step_viewed", { step });
+  }, [step]);
+
   function goTo(next: OnboardingStep) {
     setFormError(null);
     setStepOverride(next);
@@ -110,11 +115,19 @@ export function OnboardingFlow({ onDone }: { onDone?: () => void }) {
       });
       // Never keep the password around after it has been stored.
       setPassword("");
+      captureProductEvent("onboarding_connection_result", {
+        result: "success",
+        verification_skipped: skipVerification,
+      });
       if (!result.verified_at && result.verification_error) {
         setWarning(result.verification_error);
       }
       goTo("tools");
     } catch (error) {
+      captureProductEvent("onboarding_connection_result", {
+        result: "error",
+        verification_skipped: skipVerification,
+      });
       setFormError(error instanceof Error ? error.message : "Could not save your METU connection.");
     }
   }
@@ -131,8 +144,16 @@ export function OnboardingFlow({ onDone }: { onDone?: () => void }) {
         locale,
         enabled_tools: enabledTools,
       });
+      captureProductEvent("onboarding_tool_selection_saved", {
+        tool_count: enabledTools.length,
+        result: "success",
+      });
       goTo("ready");
     } catch (error) {
+      captureProductEvent("onboarding_tool_selection_saved", {
+        tool_count: enabledTools.length,
+        result: "error",
+      });
       setFormError(error instanceof Error ? error.message : "Could not save your tool selection.");
     }
   }
@@ -146,6 +167,7 @@ export function OnboardingFlow({ onDone }: { onDone?: () => void }) {
         onboarding_step: "ready",
         onboarding_completed: true,
       });
+      captureProductEvent("onboarding_finished", { path: "completed" });
       onDone?.();
     } catch (error) {
       setFormError(error instanceof Error ? error.message : "Could not finish setup.");
@@ -154,6 +176,7 @@ export function OnboardingFlow({ onDone }: { onDone?: () => void }) {
 
   async function skipSetup() {
     await update.mutateAsync({ onboarding_completed: true, onboarding_step: "ready" });
+    captureProductEvent("onboarding_finished", { path: "skipped" });
     onDone?.();
   }
 

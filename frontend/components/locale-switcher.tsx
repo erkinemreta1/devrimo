@@ -3,6 +3,7 @@
 import { LanguagesIcon } from "lucide-react";
 import { useLocale } from "@/components/locale-provider";
 import { cn } from "@/lib/utils";
+import { captureProductEvent } from "@/components/posthog-analytics";
 
 export function LocaleSwitcher({ className }: { className?: string }) {
   const { locale, setLocale } = useLocale();
@@ -14,7 +15,10 @@ export function LocaleSwitcher({ className }: { className?: string }) {
         <button
           key={item}
           type="button"
-          onClick={() => setLocale(item)}
+          onClick={() => {
+            setLocale(item);
+            captureProductEvent("language_changed", { locale: item });
+          }}
           className={cn(
             "min-h-9 rounded-full px-3 py-1 text-[11px] font-bold tracking-wide transition-[color,background-color,transform,box-shadow] duration-200 uppercase outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background active:scale-90",
             locale === item

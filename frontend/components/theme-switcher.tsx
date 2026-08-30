@@ -5,6 +5,7 @@ import { useTheme } from "next-themes";
 import { useSyncExternalStore } from "react";
 import { useLocale } from "@/components/locale-provider";
 import { cn } from "@/lib/utils";
+import { captureProductEvent } from "@/components/posthog-analytics";
 
 export function ThemeSwitcher({ className }: { className?: string }) {
   const { theme, setTheme } = useTheme();
@@ -33,7 +34,10 @@ export function ThemeSwitcher({ className }: { className?: string }) {
             type="button"
             aria-label={pick({ tr, en })}
             aria-pressed={active}
-            onClick={() => setTheme(value)}
+            onClick={() => {
+              setTheme(value);
+              captureProductEvent("theme_changed", { theme: value });
+            }}
             className={cn(
               "group grid size-9 place-items-center rounded-lg text-muted-foreground transition-[color,background-color,transform,box-shadow] duration-200 outline-none",
               "hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
