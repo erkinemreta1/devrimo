@@ -38,14 +38,14 @@ export function SettingsClient() {
 
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-col gap-6 p-6">
-      <div>
+      <div className="motion-enter">
         <h1 className="text-2xl font-semibold tracking-tight">{pick({ tr: "Ayarlar", en: "Settings" })}</h1>
         <p className="text-sm text-muted-foreground">{pick({ tr: "Kişisel asistanının çalışma alanını yönet.", en: "Manage your assistant's private workspace." })}</p>
       </div>
 
       <CampusConnectionCard />
 
-      <Card>
+      <Card className="motion-enter [animation-delay:90ms]">
         <CardHeader>
           <CardTitle>{pick({ tr: "Asistan", en: "Assistant" })}</CardTitle>
           <CardDescription>{pick({ tr: "Her hesap için yalıtılmış bir çalışma alanı oluşturulur. Silme işlemi bu alandaki verileri kaldırır.", en: "Each account has an isolated workspace. Removing it also deletes its workspace data." })}</CardDescription>
@@ -114,7 +114,7 @@ export function SettingsClient() {
         </CardContent>
       </Card>
 
-      <Card>
+      <Card className="motion-enter [animation-delay:150ms]">
         <CardHeader>
           <CardTitle>{pick({ tr: "Kurulum", en: "Setup" })}</CardTitle>
           <CardDescription>

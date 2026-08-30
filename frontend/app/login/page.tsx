@@ -19,10 +19,10 @@ export default function LoginPage() {
         <ThemeSwitcher />
         <LocaleSwitcher />
       </div>
-      <div className="relative mx-auto grid min-h-[calc(100svh-1.5rem)] min-w-0 max-w-6xl overflow-hidden rounded-2xl border bg-card/90 shadow-[0_24px_80px_rgb(55_37_26/14%)] backdrop-blur-sm dark:shadow-[0_24px_80px_rgb(0_0_0/45%)] sm:min-h-[calc(100svh-4rem)] sm:rounded-[2rem] lg:grid-cols-[1.08fr_0.92fr]">
+      <div className="motion-enter relative mx-auto grid min-h-[calc(100svh-1.5rem)] min-w-0 max-w-6xl overflow-hidden rounded-2xl border bg-card/90 shadow-[0_24px_80px_rgb(55_37_26/14%)] backdrop-blur-sm dark:shadow-[0_24px_80px_rgb(0_0_0/45%)] sm:min-h-[calc(100svh-4rem)] sm:rounded-[2rem] lg:grid-cols-[1.08fr_0.92fr]">
         <section className="relative flex min-w-0 flex-col justify-between overflow-hidden bg-secondary p-5 text-foreground dark:bg-[#181513] dark:text-white sm:p-10 lg:p-14">
           <div className="absolute -bottom-28 -right-24 size-80 rounded-full border-[42px] border-primary/30" />
-          <div className="relative flex items-center gap-3">
+          <div className="motion-enter relative flex items-center gap-3 [animation-delay:80ms]">
             <BrandMark />
             <div>
               <p className="font-bold leading-none tracking-tight">devrimo</p>
@@ -30,7 +30,7 @@ export default function LoginPage() {
             </div>
           </div>
 
-          <div className="relative my-10 min-w-0 max-w-xl sm:my-16 lg:my-8">
+          <div className="motion-enter relative my-10 min-w-0 max-w-xl sm:my-16 lg:my-8 [animation-delay:140ms]">
             <div className="mb-5 inline-flex items-center gap-2 rounded-full border bg-background/55 px-3 py-1.5 text-xs text-muted-foreground dark:border-white/15 dark:bg-white/5 dark:text-white/75">
               <SparklesIcon className="size-3.5 text-primary" />
               {pick({ tr: "Kampüsteki yeni çalışma arkadaşın", en: "Your new campus companion" })}
@@ -47,7 +47,7 @@ export default function LoginPage() {
             </p>
           </div>
 
-          <div className="relative grid min-w-0 grid-cols-3 gap-2">
+          <div className="motion-enter relative grid min-w-0 grid-cols-3 gap-2 [animation-delay:220ms]">
             {[{ icon: BookOpenIcon, label: pick({ tr: "Dersler", en: "Courses" }) }, { icon: CalendarDaysIcon, label: pick({ tr: "Takvim", en: "Calendar" }) }, { icon: MapPinnedIcon, label: pick({ tr: "Kampüs", en: "Campus" }) }].map(({ icon: Icon, label }) => (
               <div key={label} className="min-w-0 rounded-2xl border bg-background/55 p-2.5 text-[11px] text-muted-foreground sm:p-4 sm:text-xs dark:border-white/10 dark:bg-white/[0.04] dark:text-white/70">
                 <Icon className="mb-2 size-4 text-primary" />
@@ -58,7 +58,7 @@ export default function LoginPage() {
         </section>
 
         <section className="flex min-w-0 items-center justify-center p-4 py-8 sm:p-10 lg:p-14">
-          <div className="min-w-0 w-full max-w-md">
+          <div className="motion-enter min-w-0 w-full max-w-md [animation-delay:180ms]">
             {isSupabaseConfigured() ? (
               <Suspense>
                 <LoginForm />

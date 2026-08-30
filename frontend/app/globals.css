@@ -154,6 +154,58 @@
 }
 
 @layer utilities {
+  @keyframes devrimo-fade-up {
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  @keyframes devrimo-slide-down {
+    from {
+      opacity: 0;
+      transform: translateY(-8px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  @keyframes devrimo-slide-right {
+    from {
+      opacity: 0;
+      transform: translateX(-10px);
+    }
+    to {
+      opacity: 1;
+      transform: translateX(0);
+    }
+  }
+  @keyframes devrimo-pop {
+    from {
+      opacity: 0;
+      transform: scale(0.94);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+  .motion-enter {
+    animation: devrimo-fade-up 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  .motion-header {
+    animation: devrimo-slide-down 360ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  .motion-sidebar {
+    animation: devrimo-slide-right 400ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  .motion-pop {
+    animation: devrimo-pop 360ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
   .campus-grid {
     background-image:
       linear-gradient(rgb(128 113 94 / 7%) 1px, transparent 1px),
@@ -175,6 +227,7 @@
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+    animation-delay: 0ms !important;
   }
 }
 

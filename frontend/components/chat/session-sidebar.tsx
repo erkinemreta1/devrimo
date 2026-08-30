@@ -23,7 +23,7 @@ export function SessionSidebar({
 }) {
   const { pick } = useLocale();
   return (
-    <aside aria-label={pick({ tr: "Sohbet geçmişi", en: "Chat history" })} className="flex h-full w-64 shrink-0 flex-col border-r bg-sidebar/80">
+    <aside aria-label={pick({ tr: "Sohbet geçmişi", en: "Chat history" })} className="motion-sidebar flex h-full w-64 shrink-0 flex-col border-r bg-sidebar/80">
       <div className="p-3">
         <Button className="w-full justify-start" variant="outline" onClick={onNewChat}>
           <MessageSquarePlusIcon />
@@ -39,8 +39,8 @@ export function SessionSidebar({
               <div
                 key={session.id}
                 className={cn(
-                  "group flex items-center rounded-lg",
-                  activeId === session.id && "bg-sidebar-accent",
+                  "group flex items-center rounded-lg transition-colors duration-200",
+                  activeId === session.id && "bg-sidebar-accent shadow-[inset_3px_0_0_var(--primary)]",
                 )}
               >
                 <button

@@ -35,12 +35,23 @@ export function ThemeSwitcher({ className }: { className?: string }) {
             aria-pressed={active}
             onClick={() => setTheme(value)}
             className={cn(
-              "grid size-9 place-items-center rounded-lg text-muted-foreground transition-colors outline-none",
+              "group grid size-9 place-items-center rounded-lg text-muted-foreground transition-[color,background-color,transform,box-shadow] duration-200 outline-none",
               "hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
-              active && "bg-foreground text-background shadow-sm hover:bg-foreground hover:text-background",
+              "hover:-translate-y-px active:scale-90",
+              active && "bg-foreground text-background shadow-sm hover:bg-foreground hover:text-background hover:translate-y-0",
             )}
           >
-            <Icon className="size-3.5" aria-hidden="true" />
+            <Icon
+              className={cn(
+                "size-3.5 transition-[transform,opacity] duration-300",
+                active
+                  ? value === "light"
+                    ? "motion-pop rotate-90 scale-110 opacity-100"
+                    : "motion-pop -rotate-12 scale-110 opacity-100"
+                  : "scale-90 opacity-70",
+              )}
+              aria-hidden="true"
+            />
           </button>
         );
       })}

@@ -8,6 +8,19 @@ import { toast } from "sonner";
 import { Thread } from "@/components/thread.aui";
 import { SessionSidebar } from "@/components/chat/session-sidebar";
 import { loadSessionMessages, useChatSessions } from "@/hooks/useChat";
+import { Loader2Icon, Trash2Icon } from "lucide-react";
+import { useLocale } from "@/components/locale-provider";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogMedia,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 function toUiMessages(sessionId: string, messages: { role: string; content: string; id?: string }[]): UIMessage[] {
   return messages.map((message, index) => ({
@@ -63,10 +76,13 @@ function AssistantThread({
 }
 
 export function ChatShell() {
+  const { pick } = useLocale();
   const { sessions, remove, refetch } = useChatSessions();
   const [threadId, setThreadId] = useState<string | undefined>(undefined);
   const [seedMessages, setSeedMessages] = useState<UIMessage[] | undefined>(undefined);
   const [chatKey, setChatKey] = useState(0);
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+  const pendingDeleteSession = sessions.find((session) => session.id === pendingDeleteId);
 
   async function selectSession(sessionId: string) {
     try {
@@ -86,10 +102,11 @@ export function ChatShell() {
   }
 
   async function deleteSession(sessionId: string) {
-    if (!window.confirm("Delete this chat session?")) return;
     try {
       await remove.mutateAsync(sessionId);
       if (threadId === sessionId) newChat();
+      setPendingDeleteId(null);
+      toast.success(pick({ tr: "Sohbet silindi.", en: "Chat deleted." }));
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not delete session");
     }
@@ -102,7 +119,7 @@ export function ChatShell() {
         activeId={threadId}
         onNewChat={newChat}
         onSelect={selectSession}
-        onDelete={deleteSession}
+        onDelete={setPendingDeleteId}
       />
       <div className="min-w-0 flex-1">
         <AssistantThread
@@ -115,6 +132,49 @@ export function ChatShell() {
           }}
         />
       </div>
+      <AlertDialog
+        open={Boolean(pendingDeleteId)}
+        onOpenChange={(open) => {
+          if (!open && !remove.isPending) setPendingDeleteId(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogMedia className="bg-destructive/10 text-destructive">
+              <Trash2Icon />
+            </AlertDialogMedia>
+            <AlertDialogTitle>
+              {pick({ tr: "Bu sohbet silinsin mi?", en: "Delete this chat?" })}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {pendingDeleteSession?.title?.trim()
+                ? pick({
+                    tr: `“${pendingDeleteSession.title}” kalıcı olarak silinecek. Bu işlem geri alınamaz.`,
+                    en: `“${pendingDeleteSession.title}” will be permanently deleted. This action cannot be undone.`,
+                  })
+                : pick({
+                    tr: "Bu sohbet kalıcı olarak silinecek. Bu işlem geri alınamaz.",
+                    en: "This chat will be permanently deleted. This action cannot be undone.",
+                  })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={remove.isPending}>
+              {pick({ tr: "Vazgeç", en: "Cancel" })}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={remove.isPending || !pendingDeleteId}
+              onClick={() => {
+                if (pendingDeleteId) void deleteSession(pendingDeleteId);
+              }}
+            >
+              {remove.isPending ? <Loader2Icon className="animate-spin" /> : <Trash2Icon />}
+              {pick({ tr: "Sohbeti sil", en: "Delete chat" })}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
