@@ -2,11 +2,11 @@
 set -Eeuo pipefail
 
 DEPLOY_DIR="/opt/devrimo"
-BACKUP_DIR="/opt/devrimo-backups"
+BACKUP_DIR="$DEPLOY_DIR/.backups"
 RELEASE_ARCHIVE="${RELEASE_ARCHIVE:?RELEASE_ARCHIVE is required}"
 DEPLOY_SHA="${DEPLOY_SHA:?DEPLOY_SHA is required}"
 NODE_BIN="/opt/devrimo/node/bin"
-LOCK_FILE="/var/lock/devrimo-deploy.lock"
+LOCK_FILE="$DEPLOY_DIR/.deploy.lock"
 
 exec 9>"$LOCK_FILE"
 flock -n 9 || { echo "Another Devrimo deployment is already running"; exit 1; }
@@ -37,7 +37,7 @@ chmod 600 "$BACKUP_DIR/source-$stamp.tar.gz"
 
 # SQLite's backup API produces a consistent snapshot even while the old API
 # process is still serving reads and writes.
-runuser -u devrimo -- "$DEPLOY_DIR/backend/.venv/bin/python" - "$DEPLOY_DIR/backend/devrimo.db" "$BACKUP_DIR/devrimo.db-$stamp" <<'PY'
+"$DEPLOY_DIR/backend/.venv/bin/python" - "$DEPLOY_DIR/backend/devrimo.db" "$BACKUP_DIR/devrimo.db-$stamp" <<'PY'
 import sqlite3
 import sys
 
@@ -51,16 +51,15 @@ PY
 chmod 600 "$BACKUP_DIR/devrimo.db-$stamp"
 
 tar -xzf "$RELEASE_ARCHIVE" -C "$DEPLOY_DIR"
-chown -R devrimo:devrimo "$DEPLOY_DIR/backend" "$DEPLOY_DIR/frontend"
 
-runuser -u devrimo -- bash -lc "
+bash -lc "
   set -e
   cd '$DEPLOY_DIR/backend'
   .venv/bin/python -m ensurepip --upgrade >/dev/null 2>&1 || true
   .venv/bin/python -m pip install -r requirements.txt
 "
 
-runuser -u devrimo -- bash -lc "
+bash -lc "
   set -e
   export PATH='$NODE_BIN':\$PATH
   cd '$DEPLOY_DIR/frontend'
@@ -70,13 +69,14 @@ runuser -u devrimo -- bash -lc "
 
 # Keep the migration/restart window short. Alembic migrations in this project
 # are additive; the database snapshot above remains available for recovery.
-systemctl stop devrimo-api
-if ! runuser -u devrimo -- bash -lc "cd '$DEPLOY_DIR/backend' && .venv/bin/python -m alembic upgrade head"; then
-  systemctl start devrimo-api
+sudo /usr/bin/systemctl stop devrimo-api.service
+if ! bash -lc "cd '$DEPLOY_DIR/backend' && .venv/bin/python -m alembic upgrade head"; then
+  sudo /usr/bin/systemctl start devrimo-api.service
   exit 1
 fi
 
-systemctl restart devrimo-api devrimo-web
+sudo /usr/bin/systemctl restart devrimo-api.service
+sudo /usr/bin/systemctl restart devrimo-web.service
 
 for attempt in {1..30}; do
   api_ok=false
@@ -85,7 +85,6 @@ for attempt in {1..30}; do
   curl -fsS -o /dev/null http://127.0.0.1:3000/ && web_ok=true
   if "$api_ok" && "$web_ok"; then
     printf '%s\n' "$DEPLOY_SHA" > "$DEPLOY_DIR/.deployed-sha"
-    chown devrimo:devrimo "$DEPLOY_DIR/.deployed-sha"
     rm -f "$RELEASE_ARCHIVE"
     echo "Devrimo deployment $DEPLOY_SHA is healthy"
     exit 0
@@ -93,6 +92,7 @@ for attempt in {1..30}; do
   sleep 2
 done
 
-systemctl status devrimo-api devrimo-web --no-pager || true
-journalctl -u devrimo-api -u devrimo-web -n 100 --no-pager || true
+sudo /usr/bin/systemctl status devrimo-api.service --no-pager || true
+sudo /usr/bin/systemctl status devrimo-web.service --no-pager || true
+journalctl -u devrimo-api.service -u devrimo-web.service -n 100 --no-pager || true
 exit 1
