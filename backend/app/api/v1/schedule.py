@@ -18,8 +18,10 @@ from app.agents import manager
 from app.auth.dependencies import get_current_user
 from app.auth.jwt import AuthenticatedUser
 from app.db.session import get_db
+from app.logging import get_logger
 
 router = APIRouter()
+logger = get_logger(__name__)
 _CACHE_TTL_SECONDS = 15 * 60
 _cache: dict[tuple[str, ...], tuple[float, Any]] = {}
 _locks: dict[str, asyncio.Lock] = {}
@@ -276,11 +278,22 @@ async def course_sections(
     if compact_course.startswith(department.upper()):
         # Keep METU's separator zero: department 567 + course 0201.
         compact_course = compact_course[len(department):] or "0"
-    return {
-        "data": await _call_course_info(
+    data = await _call_course_info(
             db,
             user,
             "get_course_info",
             {"department": department, "semester": semester, "course": compact_course},
         )
-    }
+    root_keys = sorted(data.keys()) if isinstance(data, dict) else []
+    sections = data.get("sections") if isinstance(data, dict) else None
+    first_section = sections[0] if isinstance(sections, list) and sections else None
+    first_schedule = first_section.get("schedule") if isinstance(first_section, dict) else None
+    first_meeting = first_schedule[0] if isinstance(first_schedule, list) and first_schedule else None
+    logger.info(
+        "schedule_course_sections_shape",
+        root_keys=root_keys,
+        section_count=len(sections) if isinstance(sections, list) else None,
+        section_keys=sorted(first_section.keys()) if isinstance(first_section, dict) else [],
+        meeting_keys=sorted(first_meeting.keys()) if isinstance(first_meeting, dict) else [],
+    )
+    return {"data": data}
