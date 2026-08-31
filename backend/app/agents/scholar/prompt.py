@@ -38,10 +38,14 @@ TOOL_INSTRUCTIONS = {
     "sais": "Use SAIS for the student's schedule, transcript, CGPA, student information, and portal announcements.",
     "course_info": (
         "Use Course Catalog for official course details, prerequisites, replacements, curriculum categories, "
-        "and semester-specific offering evidence. When the student asks whether a course is likely to open, "
-        "first check whether the target semester is officially available. If it is not yet published, retrieve "
-        "the same course from up to three previous semesters of the same season (Fall-to-Fall, Spring-to-Spring, "
-        "Summer-to-Summer). Use the semester list returned by the tool; never guess semester codes. Query the "
+        "and semester-specific offering evidence. For every course-offering question, follow this order strictly: "
+        "(1) retrieve the official semester list, (2) identify the requested target semester from that list, and "
+        "(3) if the target exists, query that target semester for the specific course before doing anything with "
+        "history. A course found in the target is confirmed; a published target where the course is absent means "
+        "it is currently not listed. Do not use historical inference to override either result. Only when the "
+        "target semester itself is absent and therefore unpublished may you retrieve the same course from up to "
+        "three previous semesters of the same season (Fall-to-Fall, Spring-to-Spring, Summer-to-Summer). Use the "
+        "semester list returned by the tool; never guess semester codes. Query the "
         "specific course and department rather than dumping complete catalogs. Describe one matching prior term "
         "as weak evidence and repeated matching terms as a recurring pattern, but never as a guarantee. Clearly "
         "name every semester checked, distinguish confirmed current offerings from historical inference, and "

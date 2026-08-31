@@ -52,6 +52,7 @@ import {
   ChevronRightIcon,
   CopyIcon,
   DownloadIcon,
+  LoaderCircleIcon,
   MicIcon,
   MoreHorizontalIcon,
   PencilIcon,
@@ -61,6 +62,8 @@ import {
 import {
   createContext,
   useContext,
+  useEffect,
+  useState,
   type ComponentType,
   type FC,
   type PropsWithChildren,
@@ -187,6 +190,10 @@ const ThreadRoot: FC<{ isEmpty: boolean; autoFocus: boolean }> = ({
             </ThreadPrimitive.Messages>
           </div>
 
+          <AuiIf condition={(s) => s.thread.isRunning}>
+            <ThreadRunningStatus />
+          </AuiIf>
+
           <ThreadPrimitive.ViewportFooter
             className={cn(
               "aui-thread-viewport-footer bg-background flex flex-col gap-4 overflow-visible pb-4 md:pb-6",
@@ -221,6 +228,37 @@ const ThreadMessage: FC = () => {
 const ThreadScrollToBottom: FC = () => {
   return (
     <ThreadPrimitive.ScrollToBottom render={<TooltipIconButton tooltip="Scroll to bottom" variant="outline" className="aui-thread-scroll-to-bottom dark:border-border dark:bg-background dark:hover:bg-accent absolute -top-12 z-10 self-center rounded-full p-4 disabled:invisible" />}><ArrowDownIcon /></ThreadPrimitive.ScrollToBottom>
+  );
+};
+
+const ThreadRunningStatus: FC = () => {
+  const { pick } = useLocale();
+  const [elapsed, setElapsed] = useState(0);
+
+  useEffect(() => {
+    const startedAt = Date.now();
+    const timer = window.setInterval(() => setElapsed(Math.floor((Date.now() - startedAt) / 1000)), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const stages = [
+    pick({ tr: "İsteğini inceliyorum", en: "Reviewing your request" }),
+    pick({ tr: "Gerekli kaynakları kontrol ediyorum", en: "Checking the relevant sources" }),
+    pick({ tr: "Yanıtı hazırlıyorum", en: "Preparing the answer" }),
+  ];
+  const stage = stages[Math.min(Math.floor(elapsed / 5), stages.length - 1)];
+
+  return (
+    <div role="status" aria-live="polite" aria-label={stage} className="mb-4 flex items-center gap-3 px-2 text-sm text-muted-foreground">
+      <span className="relative grid size-8 shrink-0 place-items-center rounded-full border border-primary/15 bg-primary/[0.06] text-primary">
+        <LoaderCircleIcon className="size-4 animate-spin motion-reduce:animate-none" />
+        <span className="absolute inset-0 animate-ping rounded-full border border-primary/15 opacity-40 motion-reduce:hidden" />
+      </span>
+      <div className="min-w-0">
+        <p className="font-medium text-foreground">{stage}<span className="inline-flex w-5 justify-start" aria-hidden="true">…</span></p>
+        <p className="text-xs tabular-nums">{pick({ tr: `${elapsed} sn · Bağlantı aktif`, en: `${elapsed}s · Connection active` })}</p>
+      </div>
+    </div>
   );
 };
 

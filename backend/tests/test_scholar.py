@@ -68,6 +68,9 @@ def test_course_offering_forecast_is_grounded_and_cautious():
     assert "never as a guarantee" in instructions
     assert "never guess semester codes" in instructions
     assert "specific course" in instructions
+    assert "follow this order strictly" in instructions
+    assert "query that target semester" in instructions
+    assert "Do not use historical inference to override" in instructions
 
 
 async def test_pool_rebuilds_when_credentials_rotate():

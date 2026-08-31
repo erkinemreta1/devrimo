@@ -34,8 +34,8 @@ TOOLKIT_INSTRUCTIONS = {
     "sais": "Use for the student's private schedule, transcript, CGPA, and SAIS announcements.",
     "course_info": (
         "Use for official catalog, prerequisite, replacement, curriculum, and semester-specific course-offering "
-        "questions. For offering forecasts, retrieve only the requested course in prior same-season semesters; "
-        "historical presence is evidence, never confirmation."
+        "questions. Always query the requested target semester first. Use prior same-season semesters only when "
+        "the target semester is not published; historical presence is evidence, never confirmation."
     ),
     "odtuclass": "Use for enrolled-course announcements, syllabi, labs, and assignment deadlines.",
     "webmail": "Use only for explicit mail requests; send and reply always require confirmation.",
