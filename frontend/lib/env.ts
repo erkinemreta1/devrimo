@@ -10,6 +10,25 @@ export function getSupabaseAnonKey() {
   );
 }
 
+/**
+ * The public URL users should return to after an auth flow.
+ *
+ * This must be explicit in production because the request URL can contain an
+ * internal bind address when the app is behind a reverse proxy.
+ */
+export function getSiteUrl() {
+  const configured = process.env.NEXT_PUBLIC_SITE_URL?.trim();
+  if (!configured) return "";
+
+  try {
+    const url = new URL(configured);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return "";
+    return url.origin;
+  } catch {
+    return "";
+  }
+}
+
 export function isSupabaseConfigured() {
   const url = getSupabaseUrl();
   const key = getSupabaseAnonKey();

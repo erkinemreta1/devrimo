@@ -25,11 +25,16 @@ export async function createClient() {
 
 export async function getAuth() {
   const supabase = await createClient();
+  const { data: claimsData, error: claimsError } = await supabase.auth.getClaims();
+  const claims = claimsData?.claims;
+
+  if (claimsError || typeof claims?.sub !== "string") return null;
+
   const {
     data: { session },
   } = await supabase.auth.getSession();
 
-  if (!session?.user) return null;
+  if (!session?.user || session.user.id !== claims.sub) return null;
 
   return {
     supabase,

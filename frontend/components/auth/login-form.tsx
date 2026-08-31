@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Loader2Icon } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
+import { getSiteUrl } from "@/lib/env";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -67,7 +68,7 @@ export function LoginForm() {
         return;
       }
 
-      const origin = window.location.origin;
+      const origin = getSiteUrl() || window.location.origin;
       const { data, error: signUpError } = await supabase.auth.signUp({
         email,
         password,
