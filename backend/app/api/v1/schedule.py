@@ -143,10 +143,16 @@ def _department_query(value: Any) -> str | None:
         # department/program rows so unrelated three-digit values (student id,
         # year, etc.) can never be mistaken for a department.
         text = value.strip()
+        try:
+            decoded = json.loads(text)
+        except json.JSONDecodeError:
+            decoded = None
+        if decoded is not None and decoded != value:
+            return _department_query(decoded)
         for pattern in (
             r"(?im)^\s*(?:department|dept\.?|program(?:me)?|b[oö]l[uü]m)\s*[:|=-]\s*([^\r\n|]+)",
             r"(?im)^\s*\|?\s*(?:department|dept\.?|program(?:me)?|b[oö]l[uü]m)\s*\|\s*([^|\r\n]+)",
-            r'(?i)["\'](?:department|department_name|dept|program|programme|b[oö]l[uü]m)["\']\s*:\s*["\']([^"\']+)',
+            r'(?i)["\'][^"\']*(?:department|dept\.?|program(?:me)?|b[oö]l[uü]m)[^"\']*["\']\s*:\s*["\']([^"\']+)',
         ):
             match = re.search(pattern, text)
             if match and (candidate := match.group(1).strip(" *`\t")):
