@@ -17,6 +17,7 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
+import { useLocale } from "@/components/locale-provider";
 
 export const ANIMATION_DURATION = 200;
 
@@ -170,6 +171,7 @@ function ReasoningTrigger({
   active?: boolean;
   duration?: number;
 }) {
+  const { pick } = useLocale();
   const durationText = duration ? ` (${duration}s)` : "";
 
   return (
@@ -192,7 +194,7 @@ function ReasoningTrigger({
           active && "shimmer motion-reduce:animate-none",
         )}
       >
-        Reasoning{durationText}
+        {active ? pick({ tr: "Düşünüyor", en: "Thinking" }) : pick({ tr: "Düşünme süreci", en: "Thought process" })}{durationText}
       </span>
       <ChevronDownIcon
         data-slot="reasoning-trigger-chevron"

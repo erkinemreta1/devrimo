@@ -93,6 +93,13 @@ export type ThreadComponents = {
 export type ThreadProps = {
   components?: ThreadComponents | undefined;
   autoFocus?: boolean | undefined;
+  activity?: ThinkingActivity[] | undefined;
+};
+
+export type ThinkingActivity = {
+  tool: string | null;
+  server: string | null;
+  status: "started" | "completed" | "error";
 };
 
 const EMPTY_COMPONENTS: ThreadComponents = {};
@@ -137,19 +144,21 @@ const ThreadHistorySkeleton: FC = () => (
 export const Thread: FC<ThreadProps> = ({
   components = EMPTY_COMPONENTS,
   autoFocus = true,
+  activity = [],
 }) => {
   const isEmpty = useAuiState(isNewChatView);
 
   return (
     <ThreadComponentsContext.Provider value={components}>
-      <ThreadRoot isEmpty={isEmpty} autoFocus={autoFocus} />
+      <ThreadRoot isEmpty={isEmpty} autoFocus={autoFocus} activity={activity} />
     </ThreadComponentsContext.Provider>
   );
 };
 
-const ThreadRoot: FC<{ isEmpty: boolean; autoFocus: boolean }> = ({
+const ThreadRoot: FC<{ isEmpty: boolean; autoFocus: boolean; activity: ThinkingActivity[] }> = ({
   isEmpty,
   autoFocus,
+  activity,
 }) => {
   const { Welcome = ThreadWelcome } = useContext(ThreadComponentsContext);
 
@@ -191,7 +200,7 @@ const ThreadRoot: FC<{ isEmpty: boolean; autoFocus: boolean }> = ({
           </div>
 
           <AuiIf condition={(s) => s.thread.isRunning}>
-            <ThreadRunningStatus />
+            <ThreadRunningStatus activity={activity} />
           </AuiIf>
 
           <ThreadPrimitive.ViewportFooter
@@ -231,7 +240,7 @@ const ThreadScrollToBottom: FC = () => {
   );
 };
 
-const ThreadRunningStatus: FC = () => {
+const ThreadRunningStatus: FC<{ activity: ThinkingActivity[] }> = ({ activity }) => {
   const { pick } = useLocale();
   const [elapsed, setElapsed] = useState(0);
 
@@ -248,18 +257,24 @@ const ThreadRunningStatus: FC = () => {
   ];
   const stage = stages[Math.min(Math.floor(elapsed / 5), stages.length - 1)];
 
-  return (
-    <div role="status" aria-live="polite" aria-label={stage} className="mb-4 flex items-center gap-3 px-2 text-sm text-muted-foreground">
-      <span className="relative grid size-8 shrink-0 place-items-center rounded-full border border-primary/15 bg-primary/[0.06] text-primary">
-        <LoaderCircleIcon className="size-4 animate-spin motion-reduce:animate-none" />
-        <span className="absolute inset-0 animate-ping rounded-full border border-primary/15 opacity-40 motion-reduce:hidden" />
-      </span>
-      <div className="min-w-0">
-        <p className="font-medium text-foreground">{stage}<span className="inline-flex w-5 justify-start" aria-hidden="true">…</span></p>
-        <p className="text-xs tabular-nums">{pick({ tr: `${elapsed} sn · Bağlantı aktif`, en: `${elapsed}s · Connection active` })}</p>
-      </div>
-    </div>
-  );
+  const sourceLabel = (server: string | null) => ({
+    sais: "SAIS",
+    course_info: pick({ tr: "Ders kataloğu", en: "Course catalog" }),
+    odtuclass: "ODTÜClass",
+    webmail: pick({ tr: "Webmail", en: "Webmail" }),
+  })[server ?? ""] ?? pick({ tr: "Kampüs kaynağı", en: "Campus source" });
+
+  return <ReasoningRoot variant="muted" defaultOpen={false}>
+    <ReasoningTrigger active duration={elapsed} />
+    <ReasoningContent aria-busy="true">
+      <ReasoningText>
+        <div role="status" aria-live="polite" aria-label={stage} className="space-y-2 py-1 text-sm text-muted-foreground">
+          <p className="flex items-center gap-2 font-medium text-foreground"><LoaderCircleIcon className="size-4 animate-spin text-primary motion-reduce:animate-none" />{stage}…</p>
+          {activity.length ? <ul className="space-y-1 text-xs">{activity.map((item, index) => <li key={`${item.tool}-${index}`} className="flex items-center justify-between gap-3"><span>{sourceLabel(item.server)}</span><span>{item.status === "started" ? pick({ tr: "Kontrol ediliyor", en: "Checking" }) : item.status === "completed" ? pick({ tr: "Tamamlandı", en: "Complete" }) : pick({ tr: "Erişilemedi", en: "Unavailable" })}</span></li>)}</ul> : <p className="text-xs">{pick({ tr: "Bağlantı aktif; ilk sonuç bekleniyor.", en: "Connection active; waiting for the first result." })}</p>}
+        </div>
+      </ReasoningText>
+    </ReasoningContent>
+  </ReasoningRoot>;
 };
 
 const ThreadWelcome: FC = () => {

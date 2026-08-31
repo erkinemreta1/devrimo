@@ -5,7 +5,7 @@ import { AssistantRuntimeProvider } from "@assistant-ui/react";
 import { AssistantChatTransport, useChatRuntime } from "@assistant-ui/ai-sdk";
 import type { DataUIPart, UIMessage } from "ai";
 import { toast } from "sonner";
-import { Thread } from "@/components/thread.aui";
+import { Thread, type ThinkingActivity } from "@/components/thread.aui";
 import { SessionSidebar } from "@/components/chat/session-sidebar";
 import { loadSessionMessages, useChatSessions } from "@/hooks/useChat";
 import { Loader2Icon, MenuIcon, Trash2Icon } from "lucide-react";
@@ -66,26 +66,31 @@ class ChatTelemetry {
   private requestStartedAt: number | null = null;
   private streamError: ChatStreamError | null = null;
 
-  readonly transport = new AssistantChatTransport({
-    api: "/api/chat",
-    prepareSendMessagesRequest: ({ id, messages }) => {
-      const latestMessage = messages.at(-1);
-      const textLength = latestMessage?.parts.reduce(
-        (total, part) => total + (part.type === "text" ? part.text.length : 0),
-        0,
-      ) ?? 0;
-      const attachmentCount = latestMessage?.parts.filter((part) => part.type === "file").length ?? 0;
-      this.requestStartedAt = Date.now();
-      this.streamError = null;
-      captureProductEvent("chat_message_sent", {
-        conversation_type: id ? "existing" : "new",
-        message_position: messages.length,
-        text_length: textLength,
-        attachment_count: attachmentCount,
-      });
-      return { body: { id, messages } };
-    },
-  });
+  readonly transport: AssistantChatTransport;
+
+  constructor(onRequestStart: () => void) {
+    this.transport = new AssistantChatTransport({
+      api: "/api/chat",
+      prepareSendMessagesRequest: ({ id, messages }) => {
+        const latestMessage = messages.at(-1);
+        const textLength = latestMessage?.parts.reduce(
+          (total, part) => total + (part.type === "text" ? part.text.length : 0),
+          0,
+        ) ?? 0;
+        const attachmentCount = latestMessage?.parts.filter((part) => part.type === "file").length ?? 0;
+        this.requestStartedAt = Date.now();
+        this.streamError = null;
+        onRequestStart();
+        captureProductEvent("chat_message_sent", {
+          conversation_type: id ? "existing" : "new",
+          message_position: messages.length,
+          text_length: textLength,
+          attachment_count: attachmentCount,
+        });
+        return { body: { id, messages } };
+      },
+    });
+  }
 
   finishDuration() {
     const startedAt = this.requestStartedAt;
@@ -114,7 +119,8 @@ function AssistantThread({
   initialMessages?: UIMessage[];
   onThreadReady: (id: string | undefined) => void;
 }) {
-  const [telemetry] = useState(() => new ChatTelemetry());
+  const [activity, setActivity] = useState<ThinkingActivity[]>([]);
+  const [telemetry] = useState(() => new ChatTelemetry(() => setActivity([])));
   const [pendingConfirmation, setPendingConfirmation] = useState<ChatConfirmation | null>(null);
   const [confirmationPending, setConfirmationPending] = useState(false);
   const { pick } = useLocale();
@@ -139,6 +145,10 @@ function AssistantThread({
         // authoritative $ai_span; this is the student-visible half — what the
         // UI was told, and when.
         const tool = part.data as unknown as ChatToolEvent;
+        setActivity((current) => {
+          const next = current.filter((item) => item.tool !== tool.tool);
+          return [...next, { tool: tool.tool, server: tool.server, status: tool.status }];
+        });
         captureProductEvent("agent_tool_call", {
           tool: tool.tool,
           server: tool.server,
@@ -229,7 +239,7 @@ function AssistantThread({
   return (
     <>
       <AssistantRuntimeProvider runtime={runtime}>
-        <Thread />
+        <Thread activity={activity} />
       </AssistantRuntimeProvider>
       <AlertDialog open={Boolean(pendingConfirmation)}>
         <AlertDialogContent>
