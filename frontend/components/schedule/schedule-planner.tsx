@@ -43,7 +43,10 @@ function sectionRecords(value: unknown): Record<string, unknown>[] {
   if (Array.isArray(value)) return value.flatMap(sectionRecords);
   if (!value || typeof value !== "object") return [];
   const record = value as Record<string, unknown>;
-  if (keyValue(record, ["sectionnumber", "section", "schedule", "meeting", "hours", "time"])) return [record];
+  const normalizedKeys = Object.keys(record).map((key) => key.toLowerCase().replace(/[^a-z0-9]/g, ""));
+  const isSectionRow = normalizedKeys.some((key) => ["sectionnumber", "section", "sectionno", "sec"].includes(key));
+  const hasMeetingData = normalizedKeys.some((key) => ["schedule", "meetings", "meeting", "lecturehours", "hours", "time"].includes(key));
+  if (isSectionRow || hasMeetingData) return [record];
   return Object.values(record).flatMap(sectionRecords);
 }
 
