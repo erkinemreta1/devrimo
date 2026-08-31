@@ -294,11 +294,8 @@ async def course_sections(
     db: AsyncSession = Depends(get_db),
 ):
     compact_course = course_code.upper().replace(" ", "").replace("-", "")
-    if compact_course.startswith(department.upper()):
-        # The catalog's seven-digit display code is department + separator
-        # zero + the three-digit course number. The form receives department
-        # separately, so its course field is the final three digits.
-        compact_course = compact_course[len(department):].lstrip("0") or "0"
+    # Course Info's contract accepts the full seven-digit METU code even
+    # though department is also a separate argument (e.g. 5670201).
     data = await _call_course_info(
             db,
             user,
