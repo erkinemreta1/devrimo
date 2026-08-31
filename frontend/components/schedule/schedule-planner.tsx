@@ -68,6 +68,25 @@ function parseCourses(value: unknown): CatalogCourse[] {
   });
 }
 
+function courseIdentity(code: string) {
+  const compact = code.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  return compact.match(/\d{3,4}$/)?.[0] ?? compact;
+}
+
+function parseCurriculumCourses(value: unknown, programSemester: string): CatalogCourse[] {
+  const payload = value as { categories?: unknown; category_courses?: { category?: unknown; courses?: unknown }[] };
+  const grouped = Array.isArray(payload?.category_courses) ? payload.category_courses : [];
+  const semesterPattern = new RegExp(`(?:^|[^0-9])${programSemester}(?:st|nd|rd|th)?\\s*(?:semester|dönem|donem)?(?:[^0-9]|$)`, "i");
+  const matchingGroups = grouped.filter((group) => semesterPattern.test(String(group.category ?? "")));
+  if (matchingGroups.length) return parseCourses(matchingGroups.map((group) => group.courses));
+
+  const matchingRows = objectRecords(value).filter((record) => {
+    const rowSemester = keyValue(record, ["programsemester", "recommendedsemester", "curriculumsemester", "semester", "term", "year"]);
+    return rowSemester !== undefined && semesterPattern.test(String(rowSemester));
+  });
+  return parseCourses(matchingRows);
+}
+
 function parseDay(value: string): Day | null {
   const text = value.toLowerCase();
   if (/monday|pazartesi|\bmon\b/.test(text)) return "Mon";
@@ -135,6 +154,7 @@ export function SchedulePlanner() {
   const [selectedCourse, setSelectedCourse] = useState<CatalogCourse | null>(null);
   const [catalogSearch, setCatalogSearch] = useState("");
   const [catalogBusy, setCatalogBusy] = useState(false);
+  const [curriculumNotice, setCurriculumNotice] = useState("");
   const [draft, setDraft] = useState({ code: "", name: "", section: "1", day: "Mon" as Day, start: 9, duration: 1, room: "", credits: 3 });
 
   useEffect(() => {
@@ -173,6 +193,34 @@ export function SchedulePlanner() {
       if (!courses.length) toast.error(t("Bu bölüm ve dönem için ders bulunamadı.", "No courses were found for this department and term."));
     } catch (error) { toast.error(error instanceof Error ? error.message : t("Dersler alınamadı.", "Courses could not be loaded.")); }
     finally { setCatalogBusy(false); }
+  }
+
+  async function loadRequiredCourses() {
+    if (!department.trim()) return toast.error(t("Bölüm kodu gerekli.", "Department code is required."));
+    setCatalogBusy(true); setCurriculumNotice(""); setSelectedCourse(null); setCatalogSections([]);
+    try {
+      const [curriculum, offering] = await Promise.all([
+        jsonFetch<{ categories: unknown; category_courses: { category?: unknown; courses?: unknown }[] }>("/api/schedule/curriculum"),
+        jsonFetch<{ data: unknown }>(`/api/schedule/courses?department=${encodeURIComponent(department.trim())}&semester=${encodeURIComponent(term)}`),
+      ]);
+      const required = parseCurriculumCourses(curriculum, semester);
+      const offered = parseCourses(offering.data);
+      const offeredByIdentity = new Map(offered.map((course) => [courseIdentity(course.rawCode), course]));
+      const courses = required.flatMap((course) => {
+        const live = offeredByIdentity.get(courseIdentity(course.rawCode));
+        return live ? [{ ...live, credits: course.credits || live.credits }] : [];
+      });
+      setCatalogCourses(courses);
+      if (!required.length) {
+        setCurriculumNotice(t("Seçilen program dönemi müfredat verisinde bulunamadı.", "The selected program semester was not found in the curriculum data."));
+      } else if (!courses.length) {
+        setCurriculumNotice(t("Müfredat dersleri bulundu ancak seçilen akademik dönemde açılan eşleşme yok.", "Curriculum courses were found, but none match the selected academic term."));
+      } else {
+        setCurriculumNotice(t(`${courses.length} müfredat dersi bu akademik dönemde açılıyor. Şube seçerek tabloya ekleyebilirsin.`, `${courses.length} curriculum courses are offered this term. Choose sections to add them to the grid.`));
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t("Müfredat dersleri alınamadı.", "Curriculum courses could not be loaded."));
+    } finally { setCatalogBusy(false); }
   }
 
   async function loadSections(course: CatalogCourse) {
@@ -256,13 +304,15 @@ export function SchedulePlanner() {
             <Card><CardHeader><CardTitle>{t("Tercihler", "Preferences")}</CardTitle></CardHeader><CardContent className="grid gap-3">
               <Field label={t("Akademik dönem", "Academic term")}><select value={term} onChange={(e) => setTerm(e.target.value)} className="h-10 w-full rounded-md border bg-background px-3 text-sm"><option value="20261">2026-2027 Fall</option><option value="20262">2026-2027 Spring</option><option value="20253">2026 Summer</option></select></Field>
               <Field label={t("Soyadı", "Surname")}><Input value={surname} onChange={(e) => setSurname(e.target.value)} placeholder={t("Kısıtlar için isteğe bağlı", "Optional for restrictions")} /></Field>
-              <div className="grid grid-cols-2 gap-3"><Field label={t("Bölüm kodu", "Department code")}><Input value={department} onChange={(e) => setDepartment(e.target.value.toUpperCase())} placeholder="236" /></Field><Field label={t("Sınıf", "Year")}><select value={semester} onChange={(e) => setSemester(e.target.value)} className="h-10 w-full rounded-md border bg-background px-3 text-sm">{[1,2,3,4,5,6,7,8].map((v) => <option key={v}>{v}</option>)}</select></Field></div>
+              <div className="grid grid-cols-2 gap-3"><Field label={t("Bölüm kodu", "Department code")}><Input value={department} onChange={(e) => setDepartment(e.target.value.toUpperCase())} placeholder="236" /></Field><Field label={t("Program dönemi", "Program semester")}><select value={semester} onChange={(e) => setSemester(e.target.value)} className="h-10 w-full rounded-md border bg-background px-3 text-sm">{[1,2,3,4,5,6,7,8].map((v) => <option key={v} value={v}>{t(`${v}. dönem`, `Semester ${v}`)}</option>)}</select></Field></div>
               <Field label={t("Boş gün", "Empty day")}><select value={emptyDay} onChange={(e) => setEmptyDay(e.target.value)} className="h-10 w-full rounded-md border bg-background px-3 text-sm"><option value="">{t("Fark etmez", "No preference")}</option>{DAYS.map((d) => <option key={d} value={d}>{dayLabel(d)}</option>)}</select></Field>
               <Toggle label={t("Çakışmaları engelle", "Prevent conflicts")} checked={avoidConflicts} onChange={setAvoidConflicts} /><Toggle label={t("Koşarak derse gitmeyeyim", "Avoid tight travel")} checked={avoidTravel} onChange={setAvoidTravel} />
             </CardContent></Card>
 
-            <Card><CardHeader><CardTitle>{t("Katalogdan ders ekle", "Add from catalog")}</CardTitle></CardHeader><CardContent className="grid gap-3">
-              <Button onClick={() => void loadCatalogCourses()} disabled={catalogBusy}>{catalogBusy ? t("Dersler alınıyor…", "Loading courses…") : t("Dersleri getir", "Load courses")}</Button>
+            <Card><CardHeader><CardTitle>{t("Dönem dersleri", "Semester courses")}</CardTitle></CardHeader><CardContent className="grid gap-3">
+              <Button onClick={() => void loadRequiredCourses()} disabled={catalogBusy}>{catalogBusy ? t("Müfredat kontrol ediliyor…", "Checking curriculum…") : t("Almam gereken dersleri getir", "Load my required courses")}</Button>
+              <Button variant="outline" onClick={() => void loadCatalogCourses()} disabled={catalogBusy}>{t("Bölümde açılan tüm dersler", "All offered department courses")}</Button>
+              {curriculumNotice ? <p className="rounded-lg border bg-muted/30 p-2 text-xs leading-5 text-muted-foreground">{curriculumNotice}</p> : null}
               {catalogCourses.length ? <><Input value={catalogSearch} onChange={(e) => setCatalogSearch(e.target.value)} placeholder={t("Ders kodu veya adı ara", "Search course code or name")} /><div className="max-h-64 space-y-1 overflow-y-auto">{catalogCourses.filter((course) => `${course.code} ${course.name}`.toLowerCase().includes(catalogSearch.toLowerCase())).map((course) => <button key={course.rawCode} onClick={() => void loadSections(course)} className={cn("w-full rounded-lg border p-2 text-left text-sm transition hover:bg-accent", selectedCourse?.rawCode === course.rawCode && "border-primary bg-primary/5")}><span className="block font-semibold">{course.code}</span><span className="block truncate text-xs text-muted-foreground">{course.name}</span></button>)}</div></> : null}
               {selectedCourse && catalogSections.length ? <div className="space-y-2 border-t pt-3"><p className="text-sm font-semibold">{selectedCourse.code} · {t("Şubeler", "Sections")}</p>{catalogSections.map((section) => <button key={section.section} onClick={() => addCatalogSection(section)} className="w-full rounded-lg border p-2 text-left text-sm transition hover:border-primary/40 hover:bg-primary/5"><span className="font-semibold">{t("Şube", "Section")} {section.section}</span>{section.instructor ? <span className="ml-2 text-xs text-muted-foreground">{section.instructor}</span> : null}<span className="mt-1 block text-xs text-muted-foreground">{section.meetings.map((meeting) => `${dayLabel(meeting.day)} ${String(meeting.start).padStart(2,"0")}:40${meeting.room ? ` · ${meeting.room}` : ""}`).join(" / ")}</span></button>)}</div> : null}
             </CardContent></Card>

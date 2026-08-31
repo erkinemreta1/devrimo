@@ -52,6 +52,7 @@ def _tool_arguments(function, values: dict[str, str]) -> dict[str, str]:
         "semester": ("semester", "semester_code", "term", "term_code"),
         "course": ("course", "course_code", "code"),
         "query": ("query", "keyword", "search", "name"),
+        "category": ("category", "category_id", "category_code", "code", "id", "name"),
     }
     arguments: dict[str, str] = {}
     for value_name, value in values.items():
@@ -75,7 +76,9 @@ async def _call_course_info(
     tool_suffix: str,
     values: dict[str, str],
 ) -> Any:
-    cache_key = (tool_suffix, *(f"{key}={value}" for key, value in sorted(values.items())))
+    # Some curriculum tools are student-specific, so cache entries must never
+    # be shared between accounts.
+    cache_key = (str(user.id), tool_suffix, *(f"{key}={value}" for key, value in sorted(values.items())))
     cached = _cached(cache_key)
     if cached is not None:
         return cached
@@ -135,6 +138,56 @@ async def courses(
     db: AsyncSession = Depends(get_db),
 ):
     return {"data": await _call_course_info(db, user, "list_program_courses", {"department": department, "semester": semester})}
+
+
+def _category_candidates(value: Any) -> list[str]:
+    candidates: list[str] = []
+
+    def visit(item: Any) -> None:
+        if isinstance(item, list):
+            for child in item:
+                visit(child)
+            return
+        if not isinstance(item, dict):
+            return
+        normalized = {str(key).lower().replace("_", "").replace("-", ""): child for key, child in item.items()}
+        if not any("course" in key for key in normalized):
+            for key in ("categoryid", "categorycode", "category", "id", "code", "name"):
+                candidate = normalized.get(key)
+                if isinstance(candidate, (str, int)) and str(candidate).strip():
+                    candidates.append(str(candidate).strip())
+                    break
+        for child in item.values():
+            visit(child)
+
+    visit(value)
+    return list(dict.fromkeys(candidates))[:24]
+
+
+@router.get("/curriculum")
+async def curriculum(
+    user: AuthenticatedUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return the student's curriculum categories and their course rows.
+
+    This is a direct MCP data pipeline. It does not construct or run an Agent
+    and therefore does not invoke an LLM or consume model tokens.
+    """
+    categories = await _call_course_info(db, user, "get_student_course_categories", {})
+    category_courses: list[dict[str, Any]] = []
+    for category in _category_candidates(categories):
+        try:
+            courses_for_category = await _call_course_info(
+                db,
+                user,
+                "get_student_courses_by_category",
+                {"category": category},
+            )
+        except HTTPException:
+            continue
+        category_courses.append({"category": category, "courses": courses_for_category})
+    return {"categories": categories, "category_courses": category_courses}
 
 
 @router.get("/courses/{course_code}")
