@@ -272,6 +272,18 @@ def test_scholar_config_uses_compression_not_offload(monkeypatch):
         get_settings.cache_clear()
 
 
+def test_scholar_builder_accepts_legacy_user_id_argument(monkeypatch):
+    from app.agents.scholar.build import build_scholar_agent
+
+    monkeypatch.setenv("AGENT_RUNTIME", "fake")
+    get_settings.cache_clear()
+    try:
+        agent = build_scholar_agent(uuid4(), [])
+        assert agent.tools == []
+    finally:
+        get_settings.cache_clear()
+
+
 async def test_scholar_profile_runs_through_the_chat_api(client, monkeypatch):
     monkeypatch.setenv("AGENT_PROFILE", "scholar")
     get_settings.cache_clear()

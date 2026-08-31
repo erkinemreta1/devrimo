@@ -54,7 +54,25 @@ destination.close()
 PY
 chmod 600 "$BACKUP_DIR/devrimo.db-$stamp"
 
-tar -xzf "$RELEASE_ARCHIVE" -C "$DEPLOY_DIR"
+stage_dir="$(mktemp -d "$DEPLOY_DIR/.release.XXXXXX")"
+trap 'rm -rf "$stage_dir"' EXIT
+tar -xzf "$RELEASE_ARCHIVE" -C "$stage_dir"
+
+# Deploy an exact source tree instead of extracting over the previous release.
+# Runtime state and secrets are preserved; stale source files are removed.
+rsync -a --delete \
+  --exclude='.env.local' \
+  --exclude='node_modules/' \
+  --exclude='.next/' \
+  "$stage_dir/frontend/" "$DEPLOY_DIR/frontend/"
+rsync -a --delete \
+  --exclude='.env' \
+  --exclude='.venv/' \
+  --exclude='.campus-state/' \
+  --exclude='.agentos/' \
+  --exclude='devrimo.db*' \
+  --exclude='secrets/' \
+  "$stage_dir/backend/" "$DEPLOY_DIR/backend/"
 
 bash -lc "
   set -e

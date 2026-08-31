@@ -1,5 +1,7 @@
 """Construct the production Scholar profile."""
 
+from uuid import UUID
+
 from agno.agent import Agent
 from agno.tools.mcp import MCPTools
 
@@ -13,7 +15,22 @@ from app.config import get_settings
 from app.observability.flags import FLAG_HISTORY_RUNS, FLAG_TOOL_CALL_LIMIT, int_payload
 
 
-def build_scholar_agent(connected: list[MCPTools], runtime: AgentRuntimeConfig | None = None) -> Agent:
+def build_scholar_agent(
+    user_or_connected: UUID | list[MCPTools],
+    runtime_or_connected: AgentRuntimeConfig | list[MCPTools] | None = None,
+) -> Agent:
+    """Build Scholar while tolerating the legacy ``(user_id, tools)`` call.
+
+    The user id is not part of the shared Scholar definition; isolation is
+    supplied per run. Accepting both signatures keeps an in-flight process
+    safe while source files are atomically replaced during a deployment.
+    """
+    if isinstance(user_or_connected, UUID):
+        connected_tools = runtime_or_connected if isinstance(runtime_or_connected, list) else []
+        runtime = None
+    else:
+        connected_tools = user_or_connected
+        runtime = runtime_or_connected if isinstance(runtime_or_connected, AgentRuntimeConfig) else None
     settings = get_settings()
     runtime = runtime or default_runtime_config()
     model = build_model(runtime)
@@ -24,12 +41,12 @@ def build_scholar_agent(connected: list[MCPTools], runtime: AgentRuntimeConfig |
         description="A grounded, privacy-conscious ODTÜ student assistant.",
         model=model,
         db=get_agno_db(),
-        tools=list(connected),
+        tools=list(connected_tools),
         tool_hooks=[production_tool_hook],
         # Tunable without a deploy: a model looping through tool calls is a
         # live incident, and this is the dial that stops it.
         tool_call_limit=int_payload(FLAG_TOOL_CALL_LIMIT, default=runtime.tool_call_limit),
-        instructions=runtime_instructions(connected),
+        instructions=runtime_instructions(connected_tools),
         use_instruction_tags=True,
         add_history_to_context=True,
         num_history_runs=int_payload(FLAG_HISTORY_RUNS, default=runtime.scholar_history_runs),
