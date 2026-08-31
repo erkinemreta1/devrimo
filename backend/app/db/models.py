@@ -8,6 +8,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     Enum,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -131,6 +132,10 @@ class AgentRuntimeSettings(Base):
     scholar_history_runs: Mapped[int | None] = mapped_column(Integer, nullable=True)
     tool_call_limit: Mapped[int | None] = mapped_column(Integer, nullable=True)
     learning_enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    # Per single token, not per million — matches the PostHog $ai_*_token_price
+    # properties these feed directly.
+    input_token_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    output_token_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     revision: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     updated_by: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
     updated_at: Mapped[datetime] = mapped_column(

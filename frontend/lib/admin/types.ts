@@ -54,6 +54,8 @@ export type RuntimeSettings = {
   scholar_history_runs: number;
   tool_call_limit: number;
   learning_enabled: boolean;
+  input_token_price: number;
+  output_token_price: number;
   revision: number;
   has_database_override: boolean;
   updated_at: string | null;

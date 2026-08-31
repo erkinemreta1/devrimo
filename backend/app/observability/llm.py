@@ -68,23 +68,24 @@ def trace_properties() -> dict[str, Any]:
     return properties
 
 
-def _cost_properties() -> dict[str, Any]:
+def _cost_properties(input_token_price: float, output_token_price: float) -> dict[str, Any]:
     """Per-token prices for a model PostHog has no price table for.
 
     The broker talks to an OpenAI-compatible endpoint serving
     ``muse-spark-1.2-contributor``. Without these, every generation reports a
     cost of zero and per-student cost analysis is silently meaningless.
+    Admin-editable (see ``AgentRuntimeConfig``), falling back to the
+    ``POSTHOG_INPUT_TOKEN_PRICE``/``POSTHOG_OUTPUT_TOKEN_PRICE`` env defaults.
     """
-    settings = get_settings()
     properties: dict[str, Any] = {}
-    if settings.posthog_input_token_price:
-        properties["$ai_input_token_price"] = settings.posthog_input_token_price
-    if settings.posthog_output_token_price:
-        properties["$ai_output_token_price"] = settings.posthog_output_token_price
+    if input_token_price:
+        properties["$ai_input_token_price"] = input_token_price
+    if output_token_price:
+        properties["$ai_output_token_price"] = output_token_price
     return properties
 
 
-def _defaults(kwargs: dict[str, Any]) -> dict[str, Any]:
+def _defaults(kwargs: dict[str, Any], input_token_price: float, output_token_price: float) -> dict[str, Any]:
     """Fill in the PostHog arguments Agno has no way to pass."""
     settings = get_settings()
 
@@ -93,7 +94,7 @@ def _defaults(kwargs: dict[str, Any]) -> dict[str, Any]:
         if trace_id is not None:
             kwargs["posthog_trace_id"] = trace_id
 
-    merged = {**trace_properties(), **_cost_properties()}
+    merged = {**trace_properties(), **_cost_properties(input_token_price, output_token_price)}
     if merged:
         # An explicit caller value always wins over the ambient one.
         kwargs["posthog_properties"] = {**merged, **(kwargs.get("posthog_properties") or {})}
@@ -119,8 +120,18 @@ def _provider_name(base_url: str) -> str:
     return "openai"
 
 
-def build_traced_async_client(**client_kwargs: Any):
+def build_traced_async_client(
+    input_token_price: float = 0.0,
+    output_token_price: float = 0.0,
+    **client_kwargs: Any,
+):
     """A PostHog-instrumented ``AsyncOpenAI`` that inherits the ambient trace.
+
+    ``input_token_price``/``output_token_price`` are resolved once, at client
+    build time, from the caller's ``AgentRuntimeConfig`` — the same admin
+    revision that gates when the agent pool rebuilds this client, so an
+    admin-edited price takes effect on the next turn without a fresh DB read
+    per generation.
 
     Returns ``None`` when PostHog is unconfigured, so ``build_model`` falls back
     to the stock Agno client and nothing about the agent changes.
@@ -146,10 +157,10 @@ def build_traced_async_client(**client_kwargs: Any):
 
     class _TracedCompletions(WrappedCompletions):
         async def create(self, **kwargs: Any):
-            return await super().create(**_defaults(kwargs))
+            return await super().create(**_defaults(kwargs, input_token_price, output_token_price))
 
         async def parse(self, **kwargs: Any):
-            return await super().parse(**_defaults(kwargs))
+            return await super().parse(**_defaults(kwargs, input_token_price, output_token_price))
 
     class _TracedChat(WrappedChat):
         @property
@@ -161,7 +172,7 @@ def build_traced_async_client(**client_kwargs: Any):
 
     class _TracedResponses(WrappedResponses):
         async def create(self, **kwargs: Any):
-            return await super().create(**_defaults(kwargs))
+            return await super().create(**_defaults(kwargs, input_token_price, output_token_price))
 
     class _TracedAsyncOpenAI(PostHogAsyncOpenAI):
         def __init__(self, **kwargs: Any):

@@ -15,6 +15,8 @@ class AgentRuntimeConfig:
     scholar_history_runs: int
     tool_call_limit: int
     learning_enabled: bool
+    input_token_price: float
+    output_token_price: float
     revision: int
 
     def as_dict(self) -> dict:
@@ -31,6 +33,8 @@ def default_runtime_config() -> AgentRuntimeConfig:
         scholar_history_runs=settings.scholar_history_runs,
         tool_call_limit=settings.agent_tool_call_limit,
         learning_enabled=settings.agent_learning_enabled,
+        input_token_price=settings.posthog_input_token_price,
+        output_token_price=settings.posthog_output_token_price,
         revision=0,
     )
 
@@ -53,6 +57,14 @@ async def get_runtime_config(db: AsyncSession) -> AgentRuntimeConfig:
         ),
         learning_enabled=(
             row.learning_enabled if row and row.learning_enabled is not None else settings.agent_learning_enabled
+        ),
+        input_token_price=(
+            row.input_token_price if row and row.input_token_price is not None else settings.posthog_input_token_price
+        ),
+        output_token_price=(
+            row.output_token_price
+            if row and row.output_token_price is not None
+            else settings.posthog_output_token_price
         ),
         revision=row.revision if row else 0,
     )

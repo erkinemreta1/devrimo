@@ -19,7 +19,7 @@ from app.observability.llm import build_traced_async_client
 logger = get_logger(__name__)
 
 
-def _traced(model: Model) -> Model:
+def _traced(model: Model, runtime: AgentRuntimeConfig) -> Model:
     """Swap in a PostHog-instrumented async client, if one can be built.
 
     Agno caches ``async_client`` and only rebuilds it when closed, so setting
@@ -32,7 +32,11 @@ def _traced(model: Model) -> Model:
         "api_key": settings.agent_openai_api_key,
         "base_url": settings.agent_openai_base_url,
     }
-    client = build_traced_async_client(**client_params)
+    client = build_traced_async_client(
+        input_token_price=runtime.input_token_price,
+        output_token_price=runtime.output_token_price,
+        **client_params,
+    )
     if client is None:
         return model
     model.async_client = client
@@ -61,7 +65,8 @@ def build_model(runtime: AgentRuntimeConfig | None = None) -> Model:
                 api_key=settings.agent_openai_api_key,
                 base_url=settings.agent_openai_base_url,
                 max_output_tokens=runtime.max_tokens,
-            )
+            ),
+            runtime,
         )
 
     if "openrouter.ai" in base_url:
@@ -73,7 +78,8 @@ def build_model(runtime: AgentRuntimeConfig | None = None) -> Model:
                 api_key=settings.agent_openai_api_key,
                 base_url=settings.agent_openai_base_url,
                 max_tokens=runtime.max_tokens,
-            )
+            ),
+            runtime,
         )
 
     from agno.models.openai import OpenAIChat
@@ -84,5 +90,6 @@ def build_model(runtime: AgentRuntimeConfig | None = None) -> Model:
             api_key=settings.agent_openai_api_key,
             base_url=settings.agent_openai_base_url,
             max_tokens=runtime.max_tokens,
-        )
+        ),
+        runtime,
     )

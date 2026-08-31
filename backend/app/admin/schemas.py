@@ -46,4 +46,6 @@ class RuntimeSettingsIn(BaseModel):
     scholar_history_runs: int = Field(ge=0, le=50)
     tool_call_limit: int = Field(ge=1, le=50)
     learning_enabled: bool
+    input_token_price: float = Field(ge=0, le=1)
+    output_token_price: float = Field(ge=0, le=1)
     reason: str = Field(min_length=3, max_length=1000)

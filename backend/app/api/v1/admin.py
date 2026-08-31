@@ -780,6 +780,8 @@ async def put_runtime_settings(
     row.scholar_history_runs = body.scholar_history_runs
     row.tool_call_limit = body.tool_call_limit
     row.learning_enabled = body.learning_enabled
+    row.input_token_price = body.input_token_price
+    row.output_token_price = body.output_token_price
     row.revision = (row.revision or 0) + 1
     row.updated_by = principal.user.id
     await db.commit()

@@ -33,6 +33,8 @@ async def test_runtime_settings_are_persisted_and_audited(client, monkeypatch):
         "scholar_history_runs": 4,
         "tool_call_limit": 7,
         "learning_enabled": False,
+        "input_token_price": 0.000003,
+        "output_token_price": 0.000015,
         "reason": "Validate a safer production default",
     }
     response = await client.put("/api/v1/admin/runtime-settings", headers=auth_header(user_id), json=body)
