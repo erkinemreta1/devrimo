@@ -274,7 +274,8 @@ async def course_sections(
 ):
     compact_course = course_code.upper().replace(" ", "").replace("-", "")
     if compact_course.startswith(department.upper()):
-        compact_course = compact_course[len(department):].lstrip("0") or "0"
+        # Keep METU's separator zero: department 567 + course 0201.
+        compact_course = compact_course[len(department):] or "0"
     return {
         "data": await _call_course_info(
             db,
