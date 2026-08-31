@@ -61,6 +61,15 @@ def test_prompt_mentions_only_connected_toolkits():
     assert "Webmail" not in instructions
 
 
+def test_course_offering_forecast_is_grounded_and_cautious():
+    instructions = "\n".join(build_instructions([SimpleNamespace(name="campus:course_info")]))
+
+    assert "same season" in instructions
+    assert "never as a guarantee" in instructions
+    assert "never guess semester codes" in instructions
+    assert "specific course" in instructions
+
+
 async def test_pool_rebuilds_when_credentials_rotate():
     pool = AgentPool()
     user_id = uuid4()
