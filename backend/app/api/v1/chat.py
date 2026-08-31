@@ -119,15 +119,22 @@ async def _serialize_events(
     """Agno run events -> OpenAI-compatible SSE, observed as one PostHog trace."""
     from agno.run.agent import RunEvent
 
+    # Some providers emit conversational preambles before a tool call (for
+    # example "I'm checking that now"). Keep one generation segment buffered;
+    # if it leads to a tool call it was only narration and is discarded. The
+    # segment after the final tool is delivered as the actual answer.
+    pending_content: list[str] = []
+
     async for event in events:
         name = getattr(event, "event", None)
 
         if name == RunEvent.run_content.value:
             content = getattr(event, "content", None)
             if isinstance(content, str) and content:
-                yield _chunk(model, delta={"role": "assistant", "content": content})
+                pending_content.append(content)
 
         elif name == RunEvent.tool_call_started.value:
+            pending_content.clear()
             tool = _tool_name(event)
             observation.tool_started(tool)
             yield _chunk(model, extension={"type": "tool_call_started", "tool": tool, "server": _tool_server(tool)})
@@ -163,6 +170,9 @@ async def _serialize_events(
             )
 
         elif name == RunEvent.run_completed.value:
+            if pending_content:
+                yield _chunk(model, delta={"role": "assistant", "content": "".join(pending_content)})
+                pending_content.clear()
             # Token counts, cost and time-to-first-token for the whole turn,
             # broken down per model role.
             observation.metrics = getattr(event, "metrics", None)

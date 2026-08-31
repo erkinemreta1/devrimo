@@ -71,6 +71,8 @@ def test_course_offering_forecast_is_grounded_and_cautious():
     assert "follow this order strictly" in instructions
     assert "query that target semester" in instructions
     assert "Do not use historical inference to override" in instructions
+    assert "list_program_courses" in instructions
+    assert "Do not use get_course_info to decide" in instructions
 
 
 async def test_pool_rebuilds_when_credentials_rotate():

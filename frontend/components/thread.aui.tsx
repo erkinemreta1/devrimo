@@ -9,13 +9,7 @@ import { File } from "@/components/file";
 import { ThreadFollowupSuggestions } from "@/components/follow-up-suggestions.aui";
 import { Image as AssistantImage } from "@/components/image";
 import { MarkdownText } from "@/components/markdown-text";
-import {
-  Reasoning,
-  ReasoningContent,
-  ReasoningRoot,
-  ReasoningText,
-  ReasoningTrigger,
-} from "@/components/reasoning.aui";
+import { Reasoning, ReasoningContent, ReasoningRoot, ReasoningText, ReasoningTrigger } from "@/components/reasoning.aui";
 import { ToolFallback } from "@/components/tool-fallback.aui";
 import {
   ToolGroupContent,
@@ -52,22 +46,13 @@ import {
   ChevronRightIcon,
   CopyIcon,
   DownloadIcon,
-  LoaderCircleIcon,
   MicIcon,
   MoreHorizontalIcon,
   PencilIcon,
   RefreshCwIcon,
   SquareIcon,
 } from "lucide-react";
-import {
-  createContext,
-  useContext,
-  useEffect,
-  useState,
-  type ComponentType,
-  type FC,
-  type PropsWithChildren,
-} from "react";
+import { createContext, useContext, type ComponentType, type FC, type PropsWithChildren } from "react";
 
 export type ThreadGroupPart = MessagePrimitive.GroupedParts.GroupPart;
 
@@ -93,13 +78,6 @@ export type ThreadComponents = {
 export type ThreadProps = {
   components?: ThreadComponents | undefined;
   autoFocus?: boolean | undefined;
-  activity?: ThinkingActivity[] | undefined;
-};
-
-export type ThinkingActivity = {
-  tool: string | null;
-  server: string | null;
-  status: "started" | "completed" | "error";
 };
 
 const EMPTY_COMPONENTS: ThreadComponents = {};
@@ -144,21 +122,19 @@ const ThreadHistorySkeleton: FC = () => (
 export const Thread: FC<ThreadProps> = ({
   components = EMPTY_COMPONENTS,
   autoFocus = true,
-  activity = [],
 }) => {
   const isEmpty = useAuiState(isNewChatView);
 
   return (
     <ThreadComponentsContext.Provider value={components}>
-      <ThreadRoot isEmpty={isEmpty} autoFocus={autoFocus} activity={activity} />
+      <ThreadRoot isEmpty={isEmpty} autoFocus={autoFocus} />
     </ThreadComponentsContext.Provider>
   );
 };
 
-const ThreadRoot: FC<{ isEmpty: boolean; autoFocus: boolean; activity: ThinkingActivity[] }> = ({
+const ThreadRoot: FC<{ isEmpty: boolean; autoFocus: boolean }> = ({
   isEmpty,
   autoFocus,
-  activity,
 }) => {
   const { Welcome = ThreadWelcome } = useContext(ThreadComponentsContext);
 
@@ -199,10 +175,6 @@ const ThreadRoot: FC<{ isEmpty: boolean; autoFocus: boolean; activity: ThinkingA
             </ThreadPrimitive.Messages>
           </div>
 
-          <AuiIf condition={(s) => s.thread.isRunning}>
-            <ThreadRunningStatus activity={activity} />
-          </AuiIf>
-
           <ThreadPrimitive.ViewportFooter
             className={cn(
               "aui-thread-viewport-footer bg-background flex flex-col gap-4 overflow-visible pb-4 md:pb-6",
@@ -238,43 +210,6 @@ const ThreadScrollToBottom: FC = () => {
   return (
     <ThreadPrimitive.ScrollToBottom render={<TooltipIconButton tooltip="Scroll to bottom" variant="outline" className="aui-thread-scroll-to-bottom dark:border-border dark:bg-background dark:hover:bg-accent absolute -top-12 z-10 self-center rounded-full p-4 disabled:invisible" />}><ArrowDownIcon /></ThreadPrimitive.ScrollToBottom>
   );
-};
-
-const ThreadRunningStatus: FC<{ activity: ThinkingActivity[] }> = ({ activity }) => {
-  const { pick } = useLocale();
-  const [elapsed, setElapsed] = useState(0);
-
-  useEffect(() => {
-    const startedAt = Date.now();
-    const timer = window.setInterval(() => setElapsed(Math.floor((Date.now() - startedAt) / 1000)), 1000);
-    return () => window.clearInterval(timer);
-  }, []);
-
-  const stages = [
-    pick({ tr: "İsteğini inceliyorum", en: "Reviewing your request" }),
-    pick({ tr: "Gerekli kaynakları kontrol ediyorum", en: "Checking the relevant sources" }),
-    pick({ tr: "Yanıtı hazırlıyorum", en: "Preparing the answer" }),
-  ];
-  const stage = stages[Math.min(Math.floor(elapsed / 5), stages.length - 1)];
-
-  const sourceLabel = (server: string | null) => ({
-    sais: "SAIS",
-    course_info: pick({ tr: "Ders kataloğu", en: "Course catalog" }),
-    odtuclass: "ODTÜClass",
-    webmail: pick({ tr: "Webmail", en: "Webmail" }),
-  })[server ?? ""] ?? pick({ tr: "Kampüs kaynağı", en: "Campus source" });
-
-  return <ReasoningRoot variant="muted" defaultOpen={false}>
-    <ReasoningTrigger active duration={elapsed} />
-    <ReasoningContent aria-busy="true">
-      <ReasoningText>
-        <div role="status" aria-live="polite" aria-label={stage} className="space-y-2 py-1 text-sm text-muted-foreground">
-          <p className="flex items-center gap-2 font-medium text-foreground"><LoaderCircleIcon className="size-4 animate-spin text-primary motion-reduce:animate-none" />{stage}…</p>
-          {activity.length ? <ul className="space-y-1 text-xs">{activity.map((item, index) => <li key={`${item.tool}-${index}`} className="flex items-center justify-between gap-3"><span>{sourceLabel(item.server)}</span><span>{item.status === "started" ? pick({ tr: "Kontrol ediliyor", en: "Checking" }) : item.status === "completed" ? pick({ tr: "Tamamlandı", en: "Complete" }) : pick({ tr: "Erişilemedi", en: "Unavailable" })}</span></li>)}</ul> : <p className="text-xs">{pick({ tr: "Bağlantı aktif; ilk sonuç bekleniyor.", en: "Connection active; waiting for the first result." })}</p>}
-        </div>
-      </ReasoningText>
-    </ReasoningContent>
-  </ReasoningRoot>;
 };
 
 const ThreadWelcome: FC = () => {
@@ -419,12 +354,8 @@ const AssistantMessage: FC = () => {
                 );
               case "indicator":
                 return (
-                  <span
-                    data-slot="aui_assistant-message-indicator"
-                    className="animate-pulse font-sans"
-                    aria-label="Assistant is working"
-                  >
-                    {"●"}
+                  <span data-slot="aui_assistant-message-indicator" className="inline-flex gap-1 py-2" role="status" aria-label="Assistant is working">
+                    {[0, 1, 2].map((index) => <span key={index} className="size-1.5 animate-bounce rounded-full bg-muted-foreground motion-reduce:animate-none" style={{ animationDelay: `${index * 120}ms` }} />)}
                   </span>
                 );
               default:
