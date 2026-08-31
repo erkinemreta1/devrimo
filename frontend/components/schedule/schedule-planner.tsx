@@ -74,17 +74,20 @@ function courseIdentity(code: string) {
 }
 
 function parseCurriculumCourses(value: unknown, programSemester: string): CatalogCourse[] {
-  const payload = value as { categories?: unknown; category_courses?: { category?: unknown; courses?: unknown }[] };
+  const payload = value as { category_courses?: { courses?: unknown }[] };
   const grouped = Array.isArray(payload?.category_courses) ? payload.category_courses : [];
-  const semesterPattern = new RegExp(`(?:^|[^0-9])${programSemester}(?:st|nd|rd|th)?\\s*(?:semester|dönem|donem)?(?:[^0-9]|$)`, "i");
-  const matchingGroups = grouped.filter((group) => semesterPattern.test(String(group.category ?? "")));
-  if (matchingGroups.length) return parseCourses(matchingGroups.map((group) => group.courses));
-
-  const matchingRows = objectRecords(value).filter((record) => {
-    const rowSemester = keyValue(record, ["programsemester", "recommendedsemester", "curriculumsemester", "semester", "term", "year"]);
-    return rowSemester !== undefined && semesterPattern.test(String(rowSemester));
+  const semesterNumber = Number(programSemester);
+  const expectedYear = Math.ceil(semesterNumber / 2);
+  const expectedParity = semesterNumber % 2;
+  const seen = new Set<string>();
+  return parseCourses(grouped.map((group) => group.courses)).filter((course) => {
+    const number = courseIdentity(course.rawCode).match(/(\d{3})$/)?.[1];
+    if (!number || Number(number[0]) !== expectedYear || Number(number[2]) % 2 !== expectedParity) return false;
+    const identity = courseIdentity(course.rawCode);
+    if (seen.has(identity)) return false;
+    seen.add(identity);
+    return true;
   });
-  return parseCourses(matchingRows);
 }
 
 function parseDay(value: string): Day | null {
@@ -206,9 +209,13 @@ export function SchedulePlanner() {
       const required = parseCurriculumCourses(curriculum, semester);
       const offered = parseCourses(offering.data);
       const offeredByIdentity = new Map(offered.map((course) => [courseIdentity(course.rawCode), course]));
+      const seen = new Set<string>();
       const courses = required.flatMap((course) => {
         const live = offeredByIdentity.get(courseIdentity(course.rawCode));
-        return live ? [{ ...live, credits: course.credits || live.credits }] : [];
+        const identity = courseIdentity(course.rawCode);
+        if (!live || seen.has(identity)) return [];
+        seen.add(identity);
+        return [{ ...live, credits: course.credits || live.credits }];
       });
       setCatalogCourses(courses);
       if (!required.length) {
