@@ -24,6 +24,9 @@ export type Overview = {
     last_24h_tokens: number;
     last_7d_tokens: number;
     estimated_cost_usd: number;
+    primary_model_tokens: number;
+    compression_tokens: number;
+    learning_tokens: number;
   };
   attention: Array<{
     user_id: string;

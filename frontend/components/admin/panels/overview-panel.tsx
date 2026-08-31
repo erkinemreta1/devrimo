@@ -99,6 +99,11 @@ function OverviewContent({ data }: { data: Overview }) {
           <UsageMetric label={pick({ tr: "Son 7 gün", en: "Last 7 days" })} value={number.format(data.usage.last_7d_tokens)} hint={pick({ tr: "Kayan zaman aralığı", en: "Rolling time window" })} />
           <UsageMetric label={pick({ tr: "Tahmini maliyet", en: "Estimated cost" })} value={usd.format(data.usage.estimated_cost_usd)} hint={pick({ tr: "Paneldeki güncel token fiyatlarıyla", en: "Using current token prices" })} icon={<CoinsIcon className="size-4 text-primary" />} />
         </CardContent>
+        <div className="grid gap-px border-t border-primary/10 bg-border/70 sm:grid-cols-3">
+          <UsageBreakdown label={pick({ tr: "Ana model", en: "Primary model" })} value={number.format(data.usage.primary_model_tokens)} />
+          <UsageBreakdown label={pick({ tr: "Sıkıştırma ek yükü", en: "Compression overhead" })} value={number.format(data.usage.compression_tokens)} />
+          <UsageBreakdown label={pick({ tr: "Öğrenme ek yükü", en: "Learning overhead" })} value={number.format(data.usage.learning_tokens)} />
+        </div>
       </Card>
 
       <div className="grid gap-4 xl:grid-cols-[1.4fr_1fr]">
@@ -159,4 +164,8 @@ function OverviewContent({ data }: { data: Overview }) {
 
 function UsageMetric({ label, value, hint, icon }: { label: string; value: string; hint: string; icon?: ReactNode }) {
   return <div className="rounded-xl border bg-background/65 p-4"><div className="flex items-center justify-between gap-2"><p className="text-xs font-medium text-muted-foreground">{label}</p>{icon}</div><p className="mt-2 text-2xl font-semibold tracking-tight tabular-nums">{value}</p><p className="mt-1 text-xs text-muted-foreground">{hint}</p></div>;
+}
+
+function UsageBreakdown({ label, value }: { label: string; value: string }) {
+  return <div className="flex items-center justify-between gap-3 bg-background/72 px-4 py-3 text-xs"><span className="text-muted-foreground">{label}</span><span className="font-semibold tabular-nums">{value}</span></div>;
 }

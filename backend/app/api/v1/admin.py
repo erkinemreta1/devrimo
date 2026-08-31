@@ -110,6 +110,34 @@ async def _token_usage(principal: AdminPrincipal, db: AsyncSession) -> dict:
             params,
         )
     ).one()
+    if dialect == "postgresql":
+        role_source = (
+            "JOIN LATERAL jsonb_each(COALESCE((r.run_data::jsonb) -> 'metrics' -> 'details', '{}'::jsonb)) "
+            "role(key, value) ON TRUE JOIN LATERAL jsonb_array_elements(role.value) entry(value) ON TRUE"
+        )
+        role_input = "COALESCE(CAST(entry.value ->> 'input_tokens' AS BIGINT), 0)"
+        role_output = "COALESCE(CAST(entry.value ->> 'output_tokens' AS BIGINT), 0)"
+    else:
+        role_source = (
+            "JOIN json_each(json_extract(r.run_data, '$.metrics.details')) role "
+            "JOIN json_each(role.value) entry"
+        )
+        role_input = "COALESCE(CAST(json_extract(entry.value, '$.input_tokens') AS BIGINT), 0)"
+        role_output = "COALESCE(CAST(json_extract(entry.value, '$.output_tokens') AS BIGINT), 0)"
+    role_rows = (
+        await db.execute(
+            text(
+                f"""
+                SELECT role.key, COALESCE(SUM({role_input} + {role_output}), 0) AS tokens
+                FROM {table} r {role_source}
+                {organization_filter}
+                GROUP BY role.key
+                """
+            ),
+            params,
+        )
+    ).all()
+    tokens_by_role = {str(role): int(tokens or 0) for role, tokens in role_rows}
     runtime = await get_runtime_config(db)
     estimated_cost = float(row.input_tokens or 0) * runtime.input_token_price + float(
         row.output_tokens or 0
@@ -122,6 +150,9 @@ async def _token_usage(principal: AdminPrincipal, db: AsyncSession) -> dict:
         "last_24h_tokens": int(row.day_tokens or 0),
         "last_7d_tokens": int(row.week_tokens or 0),
         "estimated_cost_usd": round(estimated_cost, 6),
+        "primary_model_tokens": tokens_by_role.get("model", 0),
+        "compression_tokens": tokens_by_role.get("compression_model", 0),
+        "learning_tokens": tokens_by_role.get("learning_model", 0),
     }
 
 
