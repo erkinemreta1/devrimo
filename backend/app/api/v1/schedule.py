@@ -7,6 +7,7 @@ No Agent run, language model, prompt, memory, or learning pass is involved.
 import asyncio
 import inspect
 import json
+import re
 import time
 from typing import Any
 
@@ -136,6 +137,21 @@ async def _call_sais_student_info(db: AsyncSession, user: AuthenticatedUser) -> 
 
 
 def _department_query(value: Any) -> str | None:
+    if isinstance(value, str):
+        # FastMCP text results may arrive as a rendered table or a plain-text
+        # summary instead of a JSON object.  Only read explicitly labelled
+        # department/program rows so unrelated three-digit values (student id,
+        # year, etc.) can never be mistaken for a department.
+        text = value.strip()
+        for pattern in (
+            r"(?im)^\s*(?:department|dept\.?|program(?:me)?|b[oö]l[uü]m)\s*[:|=-]\s*([^\r\n|]+)",
+            r"(?im)^\s*\|?\s*(?:department|dept\.?|program(?:me)?|b[oö]l[uü]m)\s*\|\s*([^|\r\n]+)",
+            r'(?i)["\'](?:department|department_name|dept|program|programme|b[oö]l[uü]m)["\']\s*:\s*["\']([^"\']+)',
+        ):
+            match = re.search(pattern, text)
+            if match and (candidate := match.group(1).strip(" *`\t")):
+                return candidate
+        return None
     if isinstance(value, list):
         return next((result for item in value if (result := _department_query(item))), None)
     if not isinstance(value, dict):
