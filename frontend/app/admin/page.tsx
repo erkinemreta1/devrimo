@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { apiFetch } from "@/lib/api/client";
 import { getAuth } from "@/lib/supabase/server";
 import type { AdminPrincipal } from "@/lib/admin/types";
@@ -10,5 +11,9 @@ export default async function AdminPage() {
     token: auth.accessToken,
     cache: "no-store",
   });
-  return <AdminDashboard principal={principal} />;
+  return (
+    <Suspense fallback={<div className="min-h-0 flex-1 animate-pulse bg-muted/30" />}>
+      <AdminDashboard principal={principal} />
+    </Suspense>
+  );
 }

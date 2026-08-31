@@ -14,16 +14,18 @@ export function SessionSidebar({
   onNewChat,
   onSelect,
   onDelete,
+  className,
 }: {
   sessions: ChatSession[];
   activeId?: string;
   onNewChat: () => void;
   onSelect: (sessionId: string) => void;
   onDelete: (sessionId: string) => void;
+  className?: string;
 }) {
   const { pick } = useLocale();
   return (
-    <aside aria-label={pick({ tr: "Sohbet geçmişi", en: "Chat history" })} className="motion-sidebar flex h-full w-64 shrink-0 flex-col border-r bg-sidebar/80">
+    <aside aria-label={pick({ tr: "Sohbet geçmişi", en: "Chat history" })} className={cn("motion-sidebar flex h-full w-64 shrink-0 flex-col border-r bg-sidebar/88", className)}>
       <div className="p-3">
         <Button className="w-full justify-start" variant="outline" onClick={onNewChat}>
           <MessageSquarePlusIcon />
@@ -39,7 +41,7 @@ export function SessionSidebar({
               <div
                 key={session.id}
                 className={cn(
-                  "group flex items-center rounded-lg transition-colors duration-200",
+                  "group flex min-h-11 items-center rounded-lg transition-colors duration-200",
                   activeId === session.id && "bg-sidebar-accent shadow-[inset_3px_0_0_var(--primary)]",
                 )}
               >
@@ -54,7 +56,7 @@ export function SessionSidebar({
                 <Button
                   variant="ghost"
                   size="icon-xs"
-                  className="mr-1 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+                  className="mr-1 opacity-100 transition-opacity lg:opacity-0 lg:group-hover:opacity-100 lg:focus-visible:opacity-100"
                   onClick={() => onDelete(session.id)}
                   aria-label={pick({ tr: "Sohbeti sil", en: "Delete chat" })}
                 >

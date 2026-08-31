@@ -21,7 +21,9 @@ export function LoginForm() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(
-    searchParams.get("error") === "auth" ? "Could not complete sign in." : null,
+    searchParams.get("error") === "auth"
+      ? pick({ tr: "Giriş tamamlanamadı.", en: "Could not complete sign in." })
+      : null,
   );
   const [info, setInfo] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
@@ -29,16 +31,16 @@ export function LoginForm() {
   const infoId = "auth-form-info";
 
   function authErrorMessage(caught: unknown) {
-    const message = caught instanceof Error ? caught.message : "Authentication failed";
+    const message = caught instanceof Error ? caught.message : pick({ tr: "Kimlik doğrulama başarısız oldu.", en: "Authentication failed." });
     const normalized = message.toLowerCase();
     if (normalized.includes("email not confirmed")) {
-      return "E-posta adresin henüz onaylanmamış. Gelen kutundaki Supabase onay bağlantısını açıp tekrar dene.";
+      return pick({ tr: "E-posta adresin henüz onaylanmamış. Gelen kutundaki onay bağlantısını açıp tekrar dene.", en: "Your email is not confirmed yet. Open the confirmation link in your inbox and try again." });
     }
     if (normalized.includes("invalid login credentials")) {
-      return "E-posta veya şifre hatalı. Kayıt olduysan e-posta onayını da kontrol et.";
+      return pick({ tr: "E-posta veya şifre hatalı. Kayıt olduysan e-posta onayını da kontrol et.", en: "The email or password is incorrect. If you just signed up, check your email confirmation too." });
     }
     if (normalized.includes("failed to fetch") || normalized.includes("network")) {
-      return "Supabase'e bağlanılamadı. İnternet bağlantısını ve proje durumunu kontrol et.";
+      return pick({ tr: "Giriş hizmetine bağlanılamadı. İnternet bağlantını kontrol edip tekrar dene.", en: "Could not reach the sign-in service. Check your connection and try again." });
     }
     return message;
   }
@@ -58,12 +60,12 @@ export function LoginForm() {
           password,
         });
         if (signInError) throw signInError;
-        if (!data.session) throw new Error("Giriş tamamlandı ancak oturum oluşturulamadı.");
+        if (!data.session) throw new Error(pick({ tr: "Giriş tamamlandı ancak oturum oluşturulamadı.", en: "Sign-in completed but no session was created." }));
         // Identified here as well as in the authenticated layout, so the
         // sign-in itself lands on the student rather than on the anonymous
         // device that preceded it.
         identifyStudent(data.session.user.id);
-        setInfo("Giriş başarılı, asistanın açılıyor…");
+        setInfo(pick({ tr: "Giriş başarılı, asistanın açılıyor…", en: "Signed in. Opening your assistant…" }));
         window.location.replace(next);
         return;
       }
@@ -82,7 +84,7 @@ export function LoginForm() {
         window.location.assign(next);
         return;
       }
-      setInfo("Hesabını etkinleştirmek için e-posta adresine gönderdiğimiz bağlantıyı aç.");
+      setInfo(pick({ tr: "Hesabını etkinleştirmek için e-posta adresine gönderdiğimiz bağlantıyı aç.", en: "Open the link we sent to your email to activate your account." }));
     } catch (caught) {
       captureError(caught, { source: "auth", mode });
       setError(authErrorMessage(caught));
@@ -134,7 +136,7 @@ export function LoginForm() {
           </div>
           {error ? <p id={errorId} role="alert" className="break-words rounded-xl border border-destructive/35 bg-destructive/10 px-3 py-2.5 text-sm text-destructive">{error}</p> : null}
           {info ? <p id={infoId} role="status" aria-live="polite" className="break-words rounded-xl bg-accent px-3 py-2.5 text-sm leading-5 text-accent-foreground">{info}</p> : null}
-          <Button type="submit" disabled={pending} className="w-full">
+          <Button type="submit" disabled={pending} className="h-10 w-full shadow-sm">
             {pending ? <Loader2Icon className="animate-spin" /> : null}
             {mode === "login" ? pick({ tr: "Giriş yap", en: "Sign in" }) : pick({ tr: "Hesap oluştur", en: "Create account" })}
           </Button>

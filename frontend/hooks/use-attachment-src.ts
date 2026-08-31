@@ -10,15 +10,23 @@ const useFileSrc = (file: File | undefined) => {
   );
 
   useEffect(() => {
+    let active = true;
     if (!file) {
-      setEntry(undefined);
-      return;
+      queueMicrotask(() => {
+        if (active) setEntry(undefined);
+      });
+      return () => {
+        active = false;
+      };
     }
 
     const objectUrl = URL.createObjectURL(file);
-    setEntry({ file, url: objectUrl });
+    queueMicrotask(() => {
+      if (active) setEntry({ file, url: objectUrl });
+    });
 
     return () => {
+      active = false;
       URL.revokeObjectURL(objectUrl);
     };
   }, [file]);

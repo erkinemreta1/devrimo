@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, type FC } from "react";
+import { memo } from "react";
 import { cva, type VariantProps } from "class-variance-authority";
 import {
   FileIcon,
@@ -36,27 +36,28 @@ const fileVariants = cva(
   },
 );
 
-function getMimeTypeIcon(mimeType: string): FC<{ className?: string }> {
+function MimeTypeIcon({ mimeType }: { mimeType?: string }) {
+  if (!mimeType) return <FileIcon className="size-5" />;
   const type = mimeType.toLowerCase();
   if (type.startsWith("image/")) {
-    return ImageIcon;
+    return <ImageIcon className="size-5" />;
   }
   if (type === "application/pdf") {
-    return FileTextIcon;
+    return <FileTextIcon className="size-5" />;
   }
   if (type === "application/json") {
-    return BracesIcon;
+    return <BracesIcon className="size-5" />;
   }
   if (type.startsWith("text/")) {
-    return FileTextIcon;
+    return <FileTextIcon className="size-5" />;
   }
   if (type.startsWith("audio/")) {
-    return MusicIcon;
+    return <MusicIcon className="size-5" />;
   }
   if (type.startsWith("video/")) {
-    return VideoIcon;
+    return <VideoIcon className="size-5" />;
   }
-  return FileIcon;
+  return <FileIcon className="size-5" />;
 }
 
 export type FileDataKind = "data-uri" | "url" | "base64" | "id";
@@ -122,15 +123,13 @@ function FileIconDisplay({
   children,
   ...props
 }: FileIconDisplayProps) {
-  const IconComponent = mimeType ? getMimeTypeIcon(mimeType) : FileIcon;
-
   return (
     <span
       data-slot="file-icon"
       className={cn("text-muted-foreground shrink-0", className)}
       {...props}
     >
-      {children ?? <IconComponent className="size-5" />}
+      {children ?? <MimeTypeIcon mimeType={mimeType} />}
     </span>
   );
 }
@@ -258,7 +257,7 @@ export {
   FileSize,
   FileDownload,
   fileVariants,
-  getMimeTypeIcon,
+  MimeTypeIcon,
   getFileDataKind,
   getBase64Size,
   formatFileSize,

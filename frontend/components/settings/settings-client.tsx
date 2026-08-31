@@ -2,7 +2,7 @@
 
 import { useEffect } from "react";
 import { toast } from "sonner";
-import { Loader2Icon } from "lucide-react";
+import { BotIcon, BrainIcon, Loader2Icon, RotateCcwIcon, ShieldCheckIcon, Trash2Icon } from "lucide-react";
 import { useAgent } from "@/hooks/useAgent";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -47,17 +47,20 @@ export function SettingsClient() {
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-2xl flex-col gap-6 p-6">
-      <div className="motion-enter">
-        <h1 className="text-2xl font-semibold tracking-tight">{pick({ tr: "Ayarlar", en: "Settings" })}</h1>
-        <p className="text-sm text-muted-foreground">{pick({ tr: "Kişisel asistanının çalışma alanını yönet.", en: "Manage your assistant's private workspace." })}</p>
+    <div className="mx-auto flex w-full max-w-4xl flex-col gap-5 p-4 sm:p-6 lg:p-8">
+      <div className="motion-enter flex items-start gap-3 rounded-2xl border bg-card/70 p-4 shadow-sm sm:p-5">
+        <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary"><ShieldCheckIcon className="size-4" /></span>
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">{pick({ tr: "Ayarlar", en: "Settings" })}</h1>
+          <p className="mt-1 text-sm text-muted-foreground">{pick({ tr: "Bağlantılarını, hatırlanan tercihleri ve kişisel asistan çalışma alanını yönet.", en: "Manage your connections, remembered preferences, and private assistant workspace." })}</p>
+        </div>
       </div>
 
       <CampusConnectionCard />
 
-      <Card className="motion-enter [animation-delay:60ms]">
-        <CardHeader>
-          <CardTitle>{pick({ tr: "Hatırlanan tercihler", en: "Remembered preferences" })}</CardTitle>
+      <Card className="motion-enter surface-raised border-0 ring-1 ring-foreground/8 [animation-delay:60ms]">
+        <CardHeader className="border-b">
+          <div className="flex items-center gap-2"><span className="grid size-8 place-items-center rounded-lg bg-primary/10 text-primary"><BrainIcon className="size-4" /></span><CardTitle>{pick({ tr: "Hatırlanan tercihler", en: "Remembered preferences" })}</CardTitle></div>
           <CardDescription>
             {pick({
               tr: "Asistan yalnızca açıkça hatırlamasını istediğin, hassas olmayan kalıcı tercihleri burada tutar.",
@@ -122,16 +125,16 @@ export function SettingsClient() {
         </CardContent>
       </Card>
 
-      <Card className="motion-enter [animation-delay:90ms]">
-        <CardHeader>
-          <CardTitle>{pick({ tr: "Asistan", en: "Assistant" })}</CardTitle>
+      <Card className="motion-enter surface-raised border-0 ring-1 ring-foreground/8 [animation-delay:90ms]">
+        <CardHeader className="border-b">
+          <div className="flex items-center gap-2"><span className="grid size-8 place-items-center rounded-lg bg-primary/10 text-primary"><BotIcon className="size-4" /></span><CardTitle>{pick({ tr: "Asistan", en: "Assistant" })}</CardTitle></div>
           <CardDescription>{pick({ tr: "Her hesap için yalıtılmış bir çalışma alanı oluşturulur. Silme işlemi bu alandaki verileri kaldırır.", en: "Each account has an isolated workspace. Removing it also deletes its workspace data." })}</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
           {isLoading ? (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <Loader2Icon className="size-4 animate-spin" />
-              Loading agent status…
+              {pick({ tr: "Asistan durumu yükleniyor…", en: "Loading assistant status…" })}
             </div>
           ) : agent ? (
             <>
@@ -146,21 +149,19 @@ export function SettingsClient() {
                 <Button
                   variant="outline"
                   disabled={ensureRunning.isPending || agent.status === "running"}
-                  onClick={() => run(() => ensureRunning.mutateAsync(), "Agent started")}
+                  onClick={() => run(() => ensureRunning.mutateAsync(), pick({ tr: "Asistan başlatıldı.", en: "Assistant started." }))}
                 >
                   {pick({ tr: "Başlat", en: "Start" })}
                 </Button>
                 <Button
                   variant="outline"
                   disabled={stop.isPending || agent.status !== "running"}
-                  onClick={() => run(() => stop.mutateAsync(), "Agent stopped")}
+                  onClick={() => run(() => stop.mutateAsync(), pick({ tr: "Asistan durduruldu.", en: "Assistant stopped." }))}
                 >
                   {pick({ tr: "Durdur", en: "Stop" })}
                 </Button>
                 <AlertDialog>
-                  <AlertDialogTrigger render={<Button variant="destructive" />}>
-                    {pick({ tr: "Sil", en: "Remove" })}
-                  </AlertDialogTrigger>
+                  <AlertDialogTrigger render={<Button variant="destructive" />}><Trash2Icon />{pick({ tr: "Çalışma alanını sil", en: "Remove workspace" })}</AlertDialogTrigger>
                   <AlertDialogContent>
                     <AlertDialogHeader>
                       <AlertDialogTitle>{pick({ tr: "Asistanın çalışma alanı silinsin mi?", en: "Remove this assistant workspace?" })}</AlertDialogTitle>
@@ -171,7 +172,7 @@ export function SettingsClient() {
                     <AlertDialogFooter>
                       <AlertDialogCancel>{pick({ tr: "Vazgeç", en: "Cancel" })}</AlertDialogCancel>
                       <AlertDialogAction
-                        onClick={() => run(() => destroy.mutateAsync(), "Agent destroyed")}
+                        onClick={() => run(() => destroy.mutateAsync(), pick({ tr: "Asistan çalışma alanı silindi.", en: "Assistant workspace removed." }))}
                       >
                         {pick({ tr: "Çalışma alanını sil", en: "Remove workspace" })}
                       </AlertDialogAction>
@@ -183,7 +184,7 @@ export function SettingsClient() {
           ) : (
             <div className="flex flex-col items-start gap-3">
               <p className="text-sm text-muted-foreground">{pick({ tr: "Bu hesap için henüz bir asistan çalışma alanı yok.", en: "This account does not have an assistant workspace yet." })}</p>
-              <Button onClick={() => run(() => ensureRunning.mutateAsync(), "Agent is ready")}>
+              <Button onClick={() => run(() => ensureRunning.mutateAsync(), pick({ tr: "Asistan hazır.", en: "Assistant is ready." }))}>
                 {pick({ tr: "Asistanı hazırla", en: "Set up assistant" })}
               </Button>
             </div>
@@ -191,9 +192,9 @@ export function SettingsClient() {
         </CardContent>
       </Card>
 
-      <Card className="motion-enter [animation-delay:150ms]">
-        <CardHeader>
-          <CardTitle>{pick({ tr: "Kurulum", en: "Setup" })}</CardTitle>
+      <Card className="motion-enter surface-raised border-0 ring-1 ring-foreground/8 [animation-delay:150ms]">
+        <CardHeader className="border-b">
+          <div className="flex items-center gap-2"><span className="grid size-8 place-items-center rounded-lg bg-muted text-muted-foreground"><RotateCcwIcon className="size-4" /></span><CardTitle>{pick({ tr: "Kurulum", en: "Setup" })}</CardTitle></div>
           <CardDescription>
             {pick({
               tr: "Tanıtım adımlarını baştan görmek istersen tekrar başlatabilirsin. Kayıtlı ayarların silinmez.",

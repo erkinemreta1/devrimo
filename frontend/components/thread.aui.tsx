@@ -7,7 +7,7 @@ import {
 } from "@/components/attachment.aui";
 import { File } from "@/components/file";
 import { ThreadFollowupSuggestions } from "@/components/follow-up-suggestions.aui";
-import { Image } from "@/components/image";
+import { Image as AssistantImage } from "@/components/image";
 import { MarkdownText } from "@/components/markdown-text";
 import {
   Reasoning,
@@ -38,7 +38,6 @@ import {
   ErrorPrimitive,
   groupPartByType,
   MessagePrimitive,
-  SuggestionPrimitive,
   ThreadPrimitive,
   type FileMessagePartComponent,
   type ImageMessagePartComponent,
@@ -233,14 +232,6 @@ const ThreadSuggestions: FC = () => {
   return <MetuStarterPrompts />;
 };
 
-const ThreadSuggestionItem: FC = () => {
-  return (
-    <div className="aui-thread-welcome-suggestion-display fade-in slide-in-from-bottom-2 animate-in fill-mode-both duration-200">
-      <SuggestionPrimitive.Trigger send render={<Button variant="ghost" className="aui-thread-welcome-suggestion text-foreground hover:bg-muted border-border/60 h-auto gap-1.5 rounded-full border px-3.5 py-1.5 text-sm font-normal whitespace-nowrap transition-colors" />}><SuggestionPrimitive.Title className="aui-thread-welcome-suggestion-text-1" /><SuggestionPrimitive.Description className="aui-thread-welcome-suggestion-text-2 empty:hidden" /></SuggestionPrimitive.Trigger>
-    </div>
-  );
-};
-
 const Composer: FC<{ autoFocus: boolean }> = ({ autoFocus }) => {
   const { pick } = useLocale();
 
@@ -370,7 +361,7 @@ const AssistantMessage: FC = () => {
               case "image":
                 return (
                   <div data-slot="aui_assistant-message-image" className="py-1">
-                    <Image {...part} />
+                    <AssistantImage {...part} />
                   </div>
                 );
               case "indicator":
@@ -439,7 +430,7 @@ const UserFilePart: FileMessagePartComponent = (part) => (
 
 const UserImagePart: ImageMessagePartComponent = (part) => (
   <div data-slot="aui_user-message-image" className="py-1">
-    <Image {...part} />
+    <AssistantImage {...part} />
   </div>
 );
 

@@ -8,7 +8,7 @@ import { toast } from "sonner";
 import { Thread } from "@/components/thread.aui";
 import { SessionSidebar } from "@/components/chat/session-sidebar";
 import { loadSessionMessages, useChatSessions } from "@/hooks/useChat";
-import { Loader2Icon, Trash2Icon } from "lucide-react";
+import { Loader2Icon, MenuIcon, Trash2Icon } from "lucide-react";
 import { useLocale } from "@/components/locale-provider";
 import {
   AlertDialog,
@@ -23,6 +23,14 @@ import {
 } from "@/components/ui/alert-dialog";
 import { captureError, captureProductEvent } from "@/components/posthog-analytics";
 import type { ChatConfirmation, ChatStreamError, ChatToolEvent } from "@/lib/api/chat";
+import { Button } from "@/components/ui/button";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 
 function toUiMessages(sessionId: string, messages: { role: string; content: string; id?: string }[]): UIMessage[] {
   return messages.map((message, index) => ({
@@ -240,6 +248,7 @@ export function ChatShell() {
   const [seedMessages, setSeedMessages] = useState<UIMessage[] | undefined>(undefined);
   const [chatKey, setChatKey] = useState(0);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+  const [mobileHistoryOpen, setMobileHistoryOpen] = useState(false);
   const pendingDeleteSession = sessions.find((session) => session.id === pendingDeleteId);
 
   async function selectSession(sessionId: string) {
@@ -285,6 +294,7 @@ export function ChatShell() {
   return (
     <div className="flex h-full min-h-0">
       <SessionSidebar
+        className="hidden md:flex"
         sessions={sessions}
         activeId={selectedSessionId}
         onNewChat={startNewChat}
@@ -296,7 +306,16 @@ export function ChatShell() {
           setPendingDeleteId(sessionId);
         }}
       />
-      <div className="min-w-0 flex-1">
+      <div className="relative min-w-0 flex-1">
+        <Button
+          variant="outline"
+          size="icon"
+          className="absolute left-3 top-3 z-20 bg-card/90 shadow-sm backdrop-blur md:hidden"
+          onClick={() => setMobileHistoryOpen(true)}
+          aria-label={pick({ tr: "Sohbet geçmişini aç", en: "Open chat history" })}
+        >
+          <MenuIcon />
+        </Button>
         <AssistantThread
           key={chatKey}
           threadId={threadId}
@@ -308,6 +327,26 @@ export function ChatShell() {
           }}
         />
       </div>
+      <Sheet open={mobileHistoryOpen} onOpenChange={setMobileHistoryOpen}>
+        <SheetContent side="left" className="w-[19rem] max-w-[88vw] gap-0 bg-sidebar p-0">
+          <SheetHeader className="border-b">
+            <SheetTitle>{pick({ tr: "Sohbetler", en: "Chats" })}</SheetTitle>
+            <SheetDescription>{pick({ tr: "Geçmiş bir sohbeti aç veya yeni bir sohbet başlat.", en: "Open a previous chat or start a new one." })}</SheetDescription>
+          </SheetHeader>
+          <SessionSidebar
+            className="min-h-0 w-full flex-1 border-r-0"
+            sessions={sessions}
+            activeId={selectedSessionId}
+            onNewChat={() => { startNewChat(); setMobileHistoryOpen(false); }}
+            onSelect={(sessionId) => { void selectSession(sessionId); setMobileHistoryOpen(false); }}
+            onDelete={(sessionId) => {
+              captureProductEvent("chat_delete_requested", { was_active: selectedSessionId === sessionId });
+              setPendingDeleteId(sessionId);
+              setMobileHistoryOpen(false);
+            }}
+          />
+        </SheetContent>
+      </Sheet>
       <AlertDialog
         open={Boolean(pendingDeleteId)}
         onOpenChange={(open) => {

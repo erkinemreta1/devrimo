@@ -44,6 +44,8 @@ type AttachmentPreviewProps = {
 const AttachmentPreview: FC<AttachmentPreviewProps> = ({ src }) => {
   const [isLoaded, setIsLoaded] = useState(false);
   return (
+    // Attachment sources can be short-lived blob/data URLs and are not compatible with next/image optimization.
+    // eslint-disable-next-line @next/next/no-img-element
     <img
       src={src}
       alt="Attachment preview"

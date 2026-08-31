@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
-import { CheckCircle2Icon, Loader2Icon, LockIcon, TriangleAlertIcon } from "lucide-react";
+import { CableIcon, CheckCircle2Icon, Loader2Icon, LockIcon, TriangleAlertIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -92,7 +92,7 @@ export function CampusConnectionCard() {
         verification_skipped: false,
       });
       captureError(error, { source: "settings_campus_save" });
-      toast.error(error instanceof Error ? error.message : "Could not save.");
+      toast.error(error instanceof Error ? error.message : pick({ tr: "Kaydedilemedi.", en: "Could not save." }));
     }
   }
 
@@ -104,14 +104,14 @@ export function CampusConnectionCard() {
     } catch (error) {
       if (event) captureProductEvent(event, { result: "error" });
       captureError(error, { source: "settings_campus_action" });
-      toast.error(error instanceof Error ? error.message : "Action failed");
+      toast.error(error instanceof Error ? error.message : pick({ tr: "İşlem başarısız oldu.", en: "Action failed." }));
     }
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{pick({ tr: "ODTÜ bağlantısı", en: "METU connection" })}</CardTitle>
+    <Card className="surface-raised border-0 ring-1 ring-foreground/8">
+      <CardHeader className="border-b">
+        <div className="flex items-center gap-2"><span className="grid size-8 place-items-center rounded-lg bg-primary/10 text-primary"><CableIcon className="size-4" /></span><CardTitle>{pick({ tr: "ODTÜ bağlantısı", en: "METU connection" })}</CardTitle></div>
         <CardDescription>
           {pick({
             tr: "Kampüs araçları ODTÜ sistemlerine senin adına giriş yapar. Şifren şifrelenerek saklanır ve yalnızca kendi çalışma alanındaki araçlara verilir.",

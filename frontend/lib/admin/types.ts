@@ -46,6 +46,58 @@ export type AgentRow = {
   has_error: boolean;
 };
 
+export type AdminUserDetail = {
+  status: string;
+  last_seen_at: string | null;
+  agent: { status: string } | null;
+  sessions: { count: number };
+  campus: { connected: boolean; enabled_tools: string[] };
+};
+
+export type IntegrationOverview = {
+  connected_accounts: number;
+  items: Array<{
+    id: string;
+    name_en: string;
+    name_tr: string;
+    adopted: number;
+    verification_failures: number;
+  }>;
+  commits: Record<string, string>;
+};
+
+export type AuditEvent = {
+  id: string;
+  actor_user_id: string;
+  target_user_id: string | null;
+  action: string;
+  result: string;
+  reason: string | null;
+  before: Record<string, unknown> | null;
+  after: Record<string, unknown> | null;
+  created_at: string;
+};
+
+export type AdminMembership = {
+  user_id: string;
+  email: string | null;
+  role: AdminRole;
+  organization_id: string | null;
+  bootstrap: boolean;
+};
+
+export type SystemHealth = {
+  broker: string;
+  database: string;
+  posthog: string;
+  posthog_dashboard_url: string | null;
+  supabase_admin: string;
+  agent_runtime: string;
+  resident_agents: number;
+  pool_capacity: number;
+  checked_at: string;
+};
+
 export type RuntimeSettings = {
   model_id: string;
   profile: "scholar" | "legacy";

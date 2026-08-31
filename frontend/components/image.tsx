@@ -205,6 +205,8 @@ function ImagePreview({
           <ImageOffIcon className="text-muted-foreground size-8" />
         </div>
       ) : (
+        // Assistant image parts can be data/blob URLs and must render without the Next image optimizer.
+        // eslint-disable-next-line @next/next/no-img-element
         <img
           ref={imgRef}
           src={src}
@@ -256,15 +258,10 @@ type ImageZoomProps = PropsWithChildren<{
 }>;
 
 function ImageZoom({ src, alt = "Image preview", children }: ImageZoomProps) {
-  const [isMounted, setIsMounted] = useState(false);
   const [isOpen, setIsOpen] = useState(false);
   const triggerRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    setIsMounted(true);
-  }, []);
 
   const handleOpen = useCallback(() => setIsOpen(true), []);
   const handleClose = useCallback(() => {
@@ -324,8 +321,8 @@ function ImageZoom({ src, alt = "Image preview", children }: ImageZoomProps) {
       >
         {children}
       </div>
-      {isMounted &&
-        isOpen &&
+      {isOpen &&
+        typeof document !== "undefined" &&
         createPortal(
           <div
             ref={overlayRef}
@@ -336,6 +333,8 @@ function ImageZoom({ src, alt = "Image preview", children }: ImageZoomProps) {
             onClick={handleClose}
             aria-label="Zoomed image"
           >
+            {/* The zoom view reuses the already-loaded dynamic source at its intrinsic dimensions. */}
+            {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               data-slot="image-zoom-content"
               src={src}

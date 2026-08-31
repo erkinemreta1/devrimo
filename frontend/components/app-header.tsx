@@ -1,37 +1,60 @@
 "use client";
 
-import { buttonVariants } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
 import Link from "next/link";
-import { SignOutButton } from "@/components/auth/sign-out-button";
+import { HomeIcon, MenuIcon, SettingsIcon, UserRoundIcon } from "lucide-react";
 import { BrandMark } from "@/components/brand-mark";
+import { SignOutButton } from "@/components/auth/sign-out-button";
 import { LocaleSwitcher } from "@/components/locale-switcher";
-import { useLocale } from "@/components/locale-provider";
 import { ThemeSwitcher } from "@/components/theme-switcher";
-import { HomeIcon } from "lucide-react";
+import { useLocale } from "@/components/locale-provider";
+import { Button, buttonVariants } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { cn } from "@/lib/utils";
 
 export function AppHeader({ email }: { email?: string | null }) {
   const { pick } = useLocale();
   return (
-    <header className="motion-header relative flex h-16 shrink-0 items-center justify-between gap-3 border-b bg-card/75 px-4 backdrop-blur-xl after:absolute after:inset-x-0 after:bottom-[-1px] after:h-px after:bg-gradient-to-r after:from-transparent after:via-primary/45 after:to-transparent">
-      <div className="flex items-center gap-3">
-        <Link href="/" className="group flex items-center gap-2 font-semibold tracking-tight">
-          <BrandMark className="size-8 rounded-lg shadow-[0_3px_0_#9b1026] transition-transform duration-200 group-hover:rotate-0 group-hover:scale-105" />
-          devrimo
-        </Link>
-      </div>
-      <div className="flex items-center gap-2">
+    <header className="motion-header relative z-30 flex h-16 shrink-0 items-center justify-between gap-3 border-b bg-card/82 px-3 backdrop-blur-xl after:absolute after:inset-x-0 after:bottom-[-1px] after:h-px after:bg-gradient-to-r after:from-transparent after:via-primary/30 after:to-transparent sm:px-4">
+      <Link href="/" className="group flex min-w-0 items-center gap-2 font-semibold tracking-tight outline-none focus-visible:ring-2 focus-visible:ring-ring">
+        <BrandMark className="size-8 rounded-lg shadow-[0_3px_0_#901129] transition-transform duration-200 group-hover:scale-105" />
+        <span className="truncate">devrimo</span>
+      </Link>
+
+      <div className="hidden items-center gap-2 lg:flex">
         <ThemeSwitcher />
         <LocaleSwitcher />
-        {email ? <span className="hidden text-sm text-muted-foreground sm:inline">{email}</span> : null}
-        <Link href="/" className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}>
-          <HomeIcon aria-hidden="true" />
-          <span className="sr-only sm:not-sr-only">{pick({ tr: "Ana sayfa", en: "Home" })}</span>
-        </Link>
-        <Link href="/settings" className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}>
-          {pick({ tr: "Ayarlar", en: "Settings" })}
-        </Link>
+        {email ? <span className="max-w-52 truncate px-1 text-sm text-muted-foreground">{email}</span> : null}
+        <Link href="/" className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}><HomeIcon />{pick({ tr: "Ana sayfa", en: "Home" })}</Link>
+        <Link href="/settings" className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}><SettingsIcon />{pick({ tr: "Ayarlar", en: "Settings" })}</Link>
         <SignOutButton />
+      </div>
+
+      <div className="flex items-center gap-1.5 lg:hidden">
+        <ThemeSwitcher className="h-10" />
+        <DropdownMenu>
+          <DropdownMenuTrigger render={<Button variant="outline" size="icon" aria-label={pick({ tr: "Hesap menüsünü aç", en: "Open account menu" })} />}>
+            <MenuIcon />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-72 p-2">
+            {email ? <DropdownMenuLabel className="flex items-center gap-2 px-2 py-2"><UserRoundIcon className="size-4" /><span className="min-w-0 truncate">{email}</span></DropdownMenuLabel> : null}
+            <DropdownMenuSeparator />
+            <DropdownMenuItem render={<Link href="/" />} className="min-h-10 px-2"><HomeIcon />{pick({ tr: "Ana sayfa", en: "Home" })}</DropdownMenuItem>
+            <DropdownMenuItem render={<Link href="/settings" />} className="min-h-10 px-2"><SettingsIcon />{pick({ tr: "Ayarlar", en: "Settings" })}</DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <div className="space-y-2 p-2">
+              <p className="text-xs font-medium text-muted-foreground">{pick({ tr: "Dil", en: "Language" })}</p>
+              <LocaleSwitcher className="w-full justify-center" />
+              <SignOutButton />
+            </div>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
     </header>
   );
