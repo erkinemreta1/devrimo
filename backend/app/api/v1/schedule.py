@@ -113,6 +113,58 @@ async def _call_course_info(
         return normalized
 
 
+async def _call_sais_student_info(db: AsyncSession, user: AuthenticatedUser) -> Any:
+    cache_key = (str(user.id), "sais_get_student_info")
+    cached = _cached(cache_key)
+    if cached is not None:
+        return cached
+    agent = await manager.get_agent_or_404(db, user.id)
+    resident = await manager.resident_for(db, agent)
+    toolkit = next((item for item in resident.toolkits if item.name == "campus:sais"), None)
+    function = (toolkit.functions or {}).get("sais_get_student_info") if toolkit else None
+    if function is None or function.entrypoint is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "SAIS student information access is not enabled")
+    try:
+        result = function.entrypoint()
+        if inspect.isawaitable(result):
+            result = await result
+    except Exception as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"SAIS student information request failed: {exc}") from exc
+    normalized = _json_value(result)
+    _cache[cache_key] = (time.monotonic(), normalized)
+    return normalized
+
+
+def _department_query(value: Any) -> str | None:
+    if isinstance(value, list):
+        return next((result for item in value if (result := _department_query(item))), None)
+    if not isinstance(value, dict):
+        return None
+    for key, item in value.items():
+        normalized_key = str(key).lower().replace("_", "").replace("-", "")
+        if any(part in normalized_key for part in ("department", "program", "bolum", "bölüm")) and isinstance(item, (str, int)):
+            text = str(item).strip()
+            if text:
+                return text
+    return next((result for item in value.values() if (result := _department_query(item))), None)
+
+
+@router.get("/student-context")
+async def student_context(
+    user: AuthenticatedUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    student = await _call_sais_student_info(db, user)
+    query = _department_query(student)
+    departments = None
+    if query:
+        try:
+            departments = await _call_course_info(db, user, "search_departments", {"query": query})
+        except HTTPException:
+            departments = None
+    return {"student": student, "department_query": query, "departments": departments}
+
+
 @router.get("/metadata")
 async def metadata(
     user: AuthenticatedUser = Depends(get_current_user),
@@ -198,11 +250,14 @@ async def course_sections(
     user: AuthenticatedUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    compact_course = course_code.upper().replace(" ", "").replace("-", "")
+    if compact_course.startswith(department.upper()):
+        compact_course = compact_course[len(department):].lstrip("0") or "0"
     return {
         "data": await _call_course_info(
             db,
             user,
             "get_course_info",
-            {"department": department, "semester": semester, "course": course_code},
+            {"department": department, "semester": semester, "course": compact_course},
         )
     }
