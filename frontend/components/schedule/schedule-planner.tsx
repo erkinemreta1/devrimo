@@ -13,15 +13,80 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
+import { jsonFetch } from "@/lib/api/fetcher";
 
 type Day = "Mon" | "Tue" | "Wed" | "Thu" | "Fri";
 type Entry = { id: string; code: string; name: string; section: string; day: Day; start: number; duration: number; room: string; credits: number; color: number; kind: "course" | "block" };
 type SavedPlan = { entries: Entry[]; term: string; department: string; semester: string; surname: string; emptyDay: string; avoidConflicts: boolean; avoidTravel: boolean };
+type CatalogCourse = { code: string; name: string; credits: number; rawCode: string };
+type CatalogSection = { section: string; instructor: string; meetings: { day: Day; start: number; duration: number; room: string }[] };
 
 const DAYS: Day[] = ["Mon", "Tue", "Wed", "Thu", "Fri"];
 const HOURS = Array.from({ length: 10 }, (_, index) => index + 8);
 const COLORS = ["bg-rose-500/14 border-rose-500/35 text-rose-950 dark:text-rose-100", "bg-sky-500/14 border-sky-500/35 text-sky-950 dark:text-sky-100", "bg-amber-500/16 border-amber-500/40 text-amber-950 dark:text-amber-100", "bg-emerald-500/14 border-emerald-500/35 text-emerald-950 dark:text-emerald-100", "bg-violet-500/14 border-violet-500/35 text-violet-950 dark:text-violet-100"];
 const STORAGE_KEY = "devrimo:schedule:v1";
+
+const keyValue = (record: Record<string, unknown>, candidates: string[]) => {
+  const key = Object.keys(record).find((item) => candidates.some((candidate) => item.toLowerCase().replace(/[^a-z0-9]/g, "").includes(candidate)));
+  return key ? record[key] : undefined;
+};
+
+function objectRecords(value: unknown): Record<string, unknown>[] {
+  if (Array.isArray(value)) return value.flatMap(objectRecords);
+  if (!value || typeof value !== "object") return [];
+  const record = value as Record<string, unknown>;
+  if (keyValue(record, ["coursecode", "code", "coursename"])) return [record];
+  return Object.values(record).flatMap(objectRecords);
+}
+
+function parseCourses(value: unknown): CatalogCourse[] {
+  if (typeof value === "string") {
+    try { return parseCourses(JSON.parse(value)); } catch {
+      return value.split("\n").flatMap((line) => {
+        const match = line.match(/\b(\d{7}|[A-Z]{2,5}\s*\d{3,4})\b\s*[-|:]?\s*(.*)/i);
+        return match ? [{ code: match[1].replace(/([A-Z])(?=\d)/i, "$1 ").toUpperCase(), rawCode: match[1], name: match[2].replace(/\|.*/, "").trim() || match[1], credits: Number(line.match(/\b(\d(?:\.\d)?)\s*(?:credit|kredi)/i)?.[1] ?? 0) }] : [];
+      });
+    }
+  }
+  const seen = new Set<string>();
+  return objectRecords(value).flatMap((record) => {
+    const rawCode = String(keyValue(record, ["coursecode", "code"]) ?? "").trim();
+    if (!rawCode || seen.has(rawCode)) return [];
+    seen.add(rawCode);
+    return [{ rawCode, code: rawCode.toUpperCase(), name: String(keyValue(record, ["coursename", "name", "title"]) ?? rawCode), credits: Number(keyValue(record, ["credit"]) ?? 0) }];
+  });
+}
+
+function parseDay(value: string): Day | null {
+  const text = value.toLowerCase();
+  if (/monday|pazartesi|\bmon\b/.test(text)) return "Mon";
+  if (/tuesday|salı|sali|\btue\b/.test(text)) return "Tue";
+  if (/wednesday|çarşamba|carsamba|\bwed\b/.test(text)) return "Wed";
+  if (/thursday|perşembe|persembe|\bthu\b/.test(text)) return "Thu";
+  if (/friday|cuma|\bfri\b/.test(text)) return "Fri";
+  return null;
+}
+
+function parseSections(value: unknown): CatalogSection[] {
+  if (typeof value === "string") {
+    try { return parseSections(JSON.parse(value)); } catch { return []; }
+  }
+  return objectRecords(value).flatMap((record, index) => {
+    const section = String(keyValue(record, ["sectionnumber", "section", "sec"]) ?? index + 1);
+    const instructor = String(keyValue(record, ["instructor", "lecturer", "teacher"]) ?? "");
+    const scheduleValue = keyValue(record, ["schedule", "meeting", "hours", "time"]);
+    const room = String(keyValue(record, ["room", "classroom", "location"]) ?? "");
+    const scheduleTexts = Array.isArray(scheduleValue) ? scheduleValue.map(String) : [String(scheduleValue ?? "")];
+    const meetings = scheduleTexts.flatMap((text) => {
+      const day = parseDay(text);
+      const times = text.match(/(\d{1,2}):(?:30|40)\s*[-–]\s*(\d{1,2}):(?:30|40)/);
+      if (!day || !times) return [];
+      const start = Number(times[1]);
+      return [{ day, start, duration: Math.max(1, Number(times[2]) - start), room }];
+    });
+    return meetings.length ? [{ section, instructor, meetings }] : [];
+  });
+}
 
 function overlaps(a: Entry, b: Entry) {
   return a.day === b.day && a.start < b.start + b.duration && b.start < a.start + a.duration;
@@ -31,7 +96,7 @@ export function SchedulePlanner() {
   const { pick } = useLocale();
   const [entries, setEntries] = useState<Entry[]>([]);
   const [favorites, setFavorites] = useState<Entry[][]>([]);
-  const [term, setTerm] = useState("2026-2027 Fall");
+  const [term, setTerm] = useState("20261");
   const [department, setDepartment] = useState("");
   const [semester, setSemester] = useState("1");
   const [surname, setSurname] = useState("");
@@ -39,6 +104,11 @@ export function SchedulePlanner() {
   const [avoidConflicts, setAvoidConflicts] = useState(true);
   const [avoidTravel, setAvoidTravel] = useState(false);
   const [showTravel, setShowTravel] = useState(false);
+  const [catalogCourses, setCatalogCourses] = useState<CatalogCourse[]>([]);
+  const [catalogSections, setCatalogSections] = useState<CatalogSection[]>([]);
+  const [selectedCourse, setSelectedCourse] = useState<CatalogCourse | null>(null);
+  const [catalogSearch, setCatalogSearch] = useState("");
+  const [catalogBusy, setCatalogBusy] = useState(false);
   const [draft, setDraft] = useState({ code: "", name: "", section: "1", day: "Mon" as Day, start: 9, duration: 1, room: "", credits: 3 });
 
   useEffect(() => {
@@ -65,6 +135,37 @@ export function SchedulePlanner() {
     if (avoidConflicts && entries.some((entry) => overlaps(entry, next))) return toast.error(t("Bu saat mevcut bir dersle çakışıyor.", "This time conflicts with an existing course."));
     setEntries((current) => [...current, next]);
     setDraft((current) => ({ ...current, code: "", name: "", room: "" }));
+  }
+
+  async function loadCatalogCourses() {
+    if (!department.trim() || !term.trim()) return toast.error(t("Bölüm kodu ve dönem gerekli.", "Department and term are required."));
+    setCatalogBusy(true); setSelectedCourse(null); setCatalogSections([]);
+    try {
+      const response = await jsonFetch<{ data: unknown }>(`/api/schedule/courses?department=${encodeURIComponent(department.trim())}&semester=${encodeURIComponent(term)}`);
+      const courses = parseCourses(response.data);
+      setCatalogCourses(courses);
+      if (!courses.length) toast.error(t("Bu bölüm ve dönem için ders bulunamadı.", "No courses were found for this department and term."));
+    } catch (error) { toast.error(error instanceof Error ? error.message : t("Dersler alınamadı.", "Courses could not be loaded.")); }
+    finally { setCatalogBusy(false); }
+  }
+
+  async function loadSections(course: CatalogCourse) {
+    setCatalogBusy(true); setSelectedCourse(course); setCatalogSections([]);
+    try {
+      const response = await jsonFetch<{ data: unknown }>(`/api/schedule/courses/${encodeURIComponent(course.rawCode)}?department=${encodeURIComponent(department.trim())}&semester=${encodeURIComponent(term)}`);
+      const sections = parseSections(response.data);
+      setCatalogSections(sections);
+      if (!sections.length) toast.error(t("Şube saatleri okunamadı; ders ayrıntısı eksik olabilir.", "Section times could not be read; course details may be incomplete."));
+    } catch (error) { toast.error(error instanceof Error ? error.message : t("Şubeler alınamadı.", "Sections could not be loaded.")); }
+    finally { setCatalogBusy(false); }
+  }
+
+  function addCatalogSection(section: CatalogSection) {
+    if (!selectedCourse) return;
+    const additions = section.meetings.map((meeting, index) => ({ id: crypto.randomUUID(), code: selectedCourse.code, name: selectedCourse.name, section: section.section, credits: index === 0 ? selectedCourse.credits : 0, color: uniqueCourses % COLORS.length, kind: "course" as const, ...meeting }));
+    if (avoidConflicts && additions.some((next) => entries.some((entry) => overlaps(entry, next)))) return toast.error(t("Bu şube mevcut programla çakışıyor.", "This section conflicts with your schedule."));
+    setEntries((current) => [...current, ...additions]);
+    toast.success(t(`${selectedCourse.code} şube ${section.section} eklendi.`, `${selectedCourse.code} section ${section.section} added.`));
   }
 
   function save() {
@@ -127,14 +228,20 @@ export function SchedulePlanner() {
         <div className="grid gap-5 xl:grid-cols-[330px_minmax(0,1fr)]">
           <aside className="space-y-5">
             <Card><CardHeader><CardTitle>{t("Tercihler", "Preferences")}</CardTitle></CardHeader><CardContent className="grid gap-3">
-              <Field label={t("Akademik dönem", "Academic term")}><select value={term} onChange={(e) => setTerm(e.target.value)} className="h-10 w-full rounded-md border bg-background px-3 text-sm"><option>2026-2027 Fall</option><option>2026-2027 Spring</option><option>2026 Summer</option></select></Field>
+              <Field label={t("Akademik dönem", "Academic term")}><select value={term} onChange={(e) => setTerm(e.target.value)} className="h-10 w-full rounded-md border bg-background px-3 text-sm"><option value="20261">2026-2027 Fall</option><option value="20262">2026-2027 Spring</option><option value="20253">2026 Summer</option></select></Field>
               <Field label={t("Soyadı", "Surname")}><Input value={surname} onChange={(e) => setSurname(e.target.value)} placeholder={t("Kısıtlar için isteğe bağlı", "Optional for restrictions")} /></Field>
-              <div className="grid grid-cols-2 gap-3"><Field label={t("Bölüm", "Department")}><Input value={department} onChange={(e) => setDepartment(e.target.value.toUpperCase())} placeholder="CENG" /></Field><Field label={t("Sınıf", "Year")}><select value={semester} onChange={(e) => setSemester(e.target.value)} className="h-10 w-full rounded-md border bg-background px-3 text-sm">{[1,2,3,4,5,6,7,8].map((v) => <option key={v}>{v}</option>)}</select></Field></div>
+              <div className="grid grid-cols-2 gap-3"><Field label={t("Bölüm kodu", "Department code")}><Input value={department} onChange={(e) => setDepartment(e.target.value.toUpperCase())} placeholder="236" /></Field><Field label={t("Sınıf", "Year")}><select value={semester} onChange={(e) => setSemester(e.target.value)} className="h-10 w-full rounded-md border bg-background px-3 text-sm">{[1,2,3,4,5,6,7,8].map((v) => <option key={v}>{v}</option>)}</select></Field></div>
               <Field label={t("Boş gün", "Empty day")}><select value={emptyDay} onChange={(e) => setEmptyDay(e.target.value)} className="h-10 w-full rounded-md border bg-background px-3 text-sm"><option value="">{t("Fark etmez", "No preference")}</option>{DAYS.map((d) => <option key={d} value={d}>{dayLabel(d)}</option>)}</select></Field>
               <Toggle label={t("Çakışmaları engelle", "Prevent conflicts")} checked={avoidConflicts} onChange={setAvoidConflicts} /><Toggle label={t("Koşarak derse gitmeyeyim", "Avoid tight travel")} checked={avoidTravel} onChange={setAvoidTravel} />
             </CardContent></Card>
 
-            <Card><CardHeader><CardTitle>{t("Ders veya blok ekle", "Add course or block")}</CardTitle></CardHeader><CardContent className="grid gap-3">
+            <Card><CardHeader><CardTitle>{t("Katalogdan ders ekle", "Add from catalog")}</CardTitle></CardHeader><CardContent className="grid gap-3">
+              <Button onClick={() => void loadCatalogCourses()} disabled={catalogBusy}>{catalogBusy ? t("Dersler alınıyor…", "Loading courses…") : t("Dersleri getir", "Load courses")}</Button>
+              {catalogCourses.length ? <><Input value={catalogSearch} onChange={(e) => setCatalogSearch(e.target.value)} placeholder={t("Ders kodu veya adı ara", "Search course code or name")} /><div className="max-h-64 space-y-1 overflow-y-auto">{catalogCourses.filter((course) => `${course.code} ${course.name}`.toLowerCase().includes(catalogSearch.toLowerCase())).map((course) => <button key={course.rawCode} onClick={() => void loadSections(course)} className={cn("w-full rounded-lg border p-2 text-left text-sm transition hover:bg-accent", selectedCourse?.rawCode === course.rawCode && "border-primary bg-primary/5")}><span className="block font-semibold">{course.code}</span><span className="block truncate text-xs text-muted-foreground">{course.name}</span></button>)}</div></> : null}
+              {selectedCourse && catalogSections.length ? <div className="space-y-2 border-t pt-3"><p className="text-sm font-semibold">{selectedCourse.code} · {t("Şubeler", "Sections")}</p>{catalogSections.map((section) => <button key={section.section} onClick={() => addCatalogSection(section)} className="w-full rounded-lg border p-2 text-left text-sm transition hover:border-primary/40 hover:bg-primary/5"><span className="font-semibold">{t("Şube", "Section")} {section.section}</span>{section.instructor ? <span className="ml-2 text-xs text-muted-foreground">{section.instructor}</span> : null}<span className="mt-1 block text-xs text-muted-foreground">{section.meetings.map((meeting) => `${dayLabel(meeting.day)} ${String(meeting.start).padStart(2,"0")}:40${meeting.room ? ` · ${meeting.room}` : ""}`).join(" / ")}</span></button>)}</div> : null}
+            </CardContent></Card>
+
+            <Card><CardHeader><CardTitle>{t("Elle ders veya blok ekle", "Add course or block manually")}</CardTitle></CardHeader><CardContent className="grid gap-3">
               <div className="grid grid-cols-2 gap-2"><Field label={t("Kod", "Code")}><Input value={draft.code} onChange={(e) => setDraft({ ...draft, code: e.target.value })} placeholder="MATH 260" /></Field><Field label={t("Şube", "Section")}><Input value={draft.section} onChange={(e) => setDraft({ ...draft, section: e.target.value })} /></Field></div>
               <Field label={t("Ders adı", "Course name")}><Input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder={t("Temel Lineer Cebir", "Basic Linear Algebra")} /></Field>
               <div className="grid grid-cols-3 gap-2"><Field label={t("Gün", "Day")}><select value={draft.day} onChange={(e) => setDraft({ ...draft, day: e.target.value as Day })} className="h-10 w-full rounded-md border bg-background px-2 text-sm">{DAYS.map((d) => <option key={d} value={d}>{dayLabel(d)}</option>)}</select></Field><Field label={t("Başlangıç", "Start")}><select value={draft.start} onChange={(e) => setDraft({ ...draft, start: Number(e.target.value) })} className="h-10 w-full rounded-md border bg-background px-2 text-sm">{HOURS.map((h) => <option key={h} value={h}>{String(h).padStart(2,"0")}:40</option>)}</select></Field><Field label={t("Süre", "Hours")}><select value={draft.duration} onChange={(e) => setDraft({ ...draft, duration: Number(e.target.value) })} className="h-10 w-full rounded-md border bg-background px-2 text-sm">{[1,2,3].map((h) => <option key={h}>{h}</option>)}</select></Field></div>
