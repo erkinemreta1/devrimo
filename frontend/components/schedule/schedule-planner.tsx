@@ -39,6 +39,14 @@ function objectRecords(value: unknown): Record<string, unknown>[] {
   return Object.values(record).flatMap(objectRecords);
 }
 
+function sectionRecords(value: unknown): Record<string, unknown>[] {
+  if (Array.isArray(value)) return value.flatMap(sectionRecords);
+  if (!value || typeof value !== "object") return [];
+  const record = value as Record<string, unknown>;
+  if (keyValue(record, ["sectionnumber", "section", "schedule", "meeting", "hours", "time"])) return [record];
+  return Object.values(record).flatMap(sectionRecords);
+}
+
 function parseCourses(value: unknown): CatalogCourse[] {
   if (typeof value === "string") {
     try { return parseCourses(JSON.parse(value)); } catch {
@@ -69,14 +77,29 @@ function parseDay(value: string): Day | null {
 
 function parseSections(value: unknown): CatalogSection[] {
   if (typeof value === "string") {
-    try { return parseSections(JSON.parse(value)); } catch { return []; }
+    try { return parseSections(JSON.parse(value)); } catch {
+      const chunks = value.split(/(?=^\s*(?:section|şube|sube)\s*(?:no\.?\s*)?[:#-]?\s*\d+)/gim);
+      return chunks.flatMap((chunk, index) => {
+        const section = chunk.match(/(?:section|şube|sube)\s*(?:no\.?\s*)?[:#-]?\s*(\d+)/i)?.[1] ?? String(index + 1);
+        const instructor = chunk.match(/(?:instructor|lecturer|öğretim elemanı|ogretim elemani)\s*[:|-]\s*([^\n|]+)/i)?.[1]?.trim() ?? "";
+        const room = chunk.match(/(?:room|classroom|derslik)\s*[:|-]\s*([^\n|]+)/i)?.[1]?.trim() ?? "";
+        const meetings = [...chunk.matchAll(/(monday|tuesday|wednesday|thursday|friday|pazartesi|salı|sali|çarşamba|carsamba|perşembe|persembe|cuma|mon|tue|wed|thu|fri)[^\n\d]*(\d{1,2})[:.]?(\d{2})\s*[-–]\s*(\d{1,2})[:.]?(\d{2})/gi)].flatMap((match) => {
+          const day = parseDay(match[1]);
+          if (!day) return [];
+          const startMinutes = Number(match[2]) * 60 + Number(match[3]);
+          const endMinutes = Number(match[4]) * 60 + Number(match[5]);
+          return [{ day, start: Math.floor(startMinutes / 60), duration: Math.max(1, Math.ceil((endMinutes - startMinutes) / 60)), room }];
+        });
+        return meetings.length ? [{ section, instructor, meetings }] : [];
+      });
+    }
   }
-  return objectRecords(value).flatMap((record, index) => {
+  return sectionRecords(value).flatMap((record, index) => {
     const section = String(keyValue(record, ["sectionnumber", "section", "sec"]) ?? index + 1);
     const instructor = String(keyValue(record, ["instructor", "lecturer", "teacher"]) ?? "");
     const scheduleValue = keyValue(record, ["schedule", "meeting", "hours", "time"]);
     const room = String(keyValue(record, ["room", "classroom", "location"]) ?? "");
-    const scheduleTexts = Array.isArray(scheduleValue) ? scheduleValue.map(String) : [String(scheduleValue ?? "")];
+    const scheduleTexts = Array.isArray(scheduleValue) ? scheduleValue.map((item) => typeof item === "string" ? item : JSON.stringify(item)) : [typeof scheduleValue === "string" ? scheduleValue : JSON.stringify(scheduleValue ?? "")];
     const meetings = scheduleTexts.flatMap((text) => {
       const day = parseDay(text);
       const times = text.match(/(\d{1,2}):(?:30|40)\s*[-–]\s*(\d{1,2}):(?:30|40)/);

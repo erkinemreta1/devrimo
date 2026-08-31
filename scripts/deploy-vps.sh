@@ -3,6 +3,8 @@ set -Eeuo pipefail
 
 DEPLOY_DIR="/opt/devrimo"
 BACKUP_DIR="$DEPLOY_DIR/.backups"
+RUNTIME_DIR="/var/lib/devrimo"
+DB_FILE="$RUNTIME_DIR/devrimo.db"
 RELEASE_ARCHIVE="${RELEASE_ARCHIVE:?RELEASE_ARCHIVE is required}"
 DEPLOY_SHA="${DEPLOY_SHA:?DEPLOY_SHA is required}"
 NODE_BIN="/opt/devrimo/node/bin"
@@ -14,6 +16,7 @@ flock -n 9 || { echo "Another Devrimo deployment is already running"; exit 1; }
 test -f "$RELEASE_ARCHIVE"
 test -f "$DEPLOY_DIR/backend/.env"
 test -f "$DEPLOY_DIR/frontend/.env.local"
+test -f "$DB_FILE"
 
 stamp="$(date -u +%Y%m%d-%H%M%S)"
 mkdir -p "$BACKUP_DIR"
@@ -41,7 +44,7 @@ chmod 600 "$BACKUP_DIR/source-$stamp.tar.gz"
 
 # SQLite's backup API produces a consistent snapshot even while the old API
 # process is still serving reads and writes.
-"$DEPLOY_DIR/backend/.venv/bin/python" - "$DEPLOY_DIR/backend/devrimo.db" "$BACKUP_DIR/devrimo.db-$stamp" <<'PY'
+"$DEPLOY_DIR/backend/.venv/bin/python" - "$DB_FILE" "$BACKUP_DIR/devrimo.db-$stamp" <<'PY'
 import sqlite3
 import sys
 
