@@ -154,6 +154,39 @@ def test_before_send_redacts_credential_shaped_values():
     assert result["properties"]["messages"][0]["content"] == "Ekle-birak ne zaman?"
 
 
+def test_before_send_adds_ai_cost_properties_from_token_prices():
+    event = {
+        "event": "$ai_generation",
+        "properties": {
+            "$ai_input_tokens": 512,
+            "$ai_output_tokens": 128,
+            "$ai_input_token_price": 0.0000005078125,
+            "$ai_output_token_price": 0.000001015625,
+            "$ai_latency": 37.6,
+        },
+    }
+
+    result = ph_client._before_send(event)
+
+    assert result["properties"]["$ai_input_cost_usd"] == 0.00026
+    assert result["properties"]["$ai_output_cost_usd"] == 0.00013
+    assert result["properties"]["$ai_total_cost_usd"] == 0.00039
+    assert result["properties"]["$ai_latency"] == 37.6
+
+
+def test_before_send_does_not_add_ai_costs_without_prices():
+    event = {
+        "event": "$ai_generation",
+        "properties": {"$ai_input_tokens": 512, "$ai_output_tokens": 128},
+    }
+
+    result = ph_client._before_send(event)
+
+    assert "$ai_input_cost_usd" not in result["properties"]
+    assert "$ai_output_cost_usd" not in result["properties"]
+    assert "$ai_total_cost_usd" not in result["properties"]
+
+
 def test_otlp_logs_scrub_secrets_but_preserve_content(monkeypatch):
     from app.observability import logs
 

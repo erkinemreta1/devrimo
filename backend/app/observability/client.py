@@ -20,6 +20,7 @@ through; keys, tokens, and passwords are not.
 
 from __future__ import annotations
 
+import math
 import re
 from functools import lru_cache
 from typing import Any
@@ -47,7 +48,51 @@ _SECRET_KEY_PATTERN = re.compile(
 _SECRET_VALUE_PATTERN = re.compile(
     r"((?:Bearer|Basic)\s+[\w\-.=]+|eyJ[\w\-]{8,}\.[\w\-]{8,}\.[\w\-]+|ph[cx]_[A-Za-z0-9]{16,}|sk-[A-Za-z0-9_-]{16,})"
 )
+_SAFE_AI_METRIC_KEY_PATTERN = re.compile(
+    r"^\$ai_(?:input|output|total|cache_read|cache_creation|reasoning|web_search).*tokens$"
+    r"|^\$ai_(?:input|output)_token_price$"
+)
 _REDACTED = "[redacted]"
+
+
+def _non_negative_number(properties: dict[str, Any], key: str) -> float | None:
+    """Return a finite, non-negative numeric PostHog property."""
+    try:
+        value = float(properties[key])
+    except (KeyError, TypeError, ValueError):
+        return None
+    return value if math.isfinite(value) and value >= 0 else None
+
+
+def _add_ai_cost_properties(event: Any) -> None:
+    """Add explicit USD costs to generation events using configured prices.
+
+    PostHog's OpenAI wrapper records token counts, but the broker uses a
+    custom OpenAI-compatible provider whose model is not in PostHog's price
+    table. The wrapper also carries our per-token prices, so this final event
+    hook can emit stable cost properties after the response usage is known.
+    """
+    if not isinstance(event, dict) or event.get("event") != "$ai_generation":
+        return
+    properties = event.get("properties")
+    if not isinstance(properties, dict):
+        return
+
+    costs: list[float] = []
+    for tokens_key, price_key, cost_key in (
+        ("$ai_input_tokens", "$ai_input_token_price", "$ai_input_cost_usd"),
+        ("$ai_output_tokens", "$ai_output_token_price", "$ai_output_cost_usd"),
+    ):
+        tokens = _non_negative_number(properties, tokens_key)
+        price = _non_negative_number(properties, price_key)
+        if tokens is None or price is None:
+            continue
+        cost = round(tokens * price, 12)
+        properties.setdefault(cost_key, cost)
+        costs.append(cost)
+
+    if costs:
+        properties.setdefault("$ai_total_cost_usd", round(sum(costs), 12))
 
 
 def _scrub(value: Any, depth: int = 0) -> Any:
@@ -59,7 +104,13 @@ def _scrub(value: Any, depth: int = 0) -> Any:
         return _REDACTED
     if isinstance(value, dict):
         return {
-            key: (_REDACTED if isinstance(key, str) and _SECRET_KEY_PATTERN.search(key) else _scrub(item, depth + 1))
+            key: (
+                _REDACTED
+                if isinstance(key, str)
+                and _SECRET_KEY_PATTERN.search(key)
+                and not _SAFE_AI_METRIC_KEY_PATTERN.search(key)
+                else _scrub(item, depth + 1)
+            )
             for key, item in value.items()
         }
     if isinstance(value, (list, tuple)):
@@ -83,6 +134,7 @@ def _before_send(event: Any) -> Any:
                 event["properties"] = scrubbed
             else:
                 event.properties = scrubbed
+            _add_ai_cost_properties(event)
     except Exception:  # pragma: no cover - defensive; scrubbing must not break capture
         return event
     return event

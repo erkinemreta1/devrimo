@@ -59,6 +59,12 @@ type ProductEventProperties = {
   settings_opened: Record<string, never>;
 };
 
+export type StudentIdentityProperties = {
+  name?: string | null;
+  user_name?: string | null;
+  department?: string | null;
+};
+
 function isReady() {
   return typeof window !== "undefined" && posthog.__loaded;
 }
@@ -87,13 +93,16 @@ export function captureError(error: unknown, context: Record<string, unknown> = 
 /**
  * Link this browser to a student.
  *
- * The Supabase user id and nothing else: email is personal data that the
- * broker already holds and PostHog has no need for. Safe to call repeatedly —
- * PostHog ignores an identify for the id it already has.
+ * The Supabase user id links events to the right person. Profile data is
+ * supplied when it becomes available; email is deliberately excluded because
+ * the broker already holds it and PostHog has no need for it.
  */
-export function identifyStudent(userId: string) {
+export function identifyStudent(userId: string, properties: StudentIdentityProperties = {}) {
   if (!isReady() || !userId) return;
-  posthog.identify(userId);
+  const personProperties = Object.fromEntries(
+    Object.entries(properties).filter(([, value]) => typeof value === "string" && value.trim().length > 0),
+  );
+  posthog.identify(userId, personProperties);
 }
 
 /**
