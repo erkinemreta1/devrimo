@@ -67,6 +67,64 @@ def _scope(principal: AdminPrincipal):
     return AccountDirectory.organization_id == principal.organization_id if principal.organization_id else text("1=1")
 
 
+async def _token_usage(principal: AdminPrincipal, db: AsyncSession) -> dict:
+    """Aggregate Agno run metrics without loading prompts or responses."""
+    dialect = db.bind.dialect.name if db.bind is not None else "sqlite"
+    table = "ai.agno_runs" if dialect == "postgresql" else "agno_runs"
+    if dialect == "postgresql":
+        metric = lambda key: f"COALESCE(CAST(run_data -> 'metrics' ->> '{key}' AS BIGINT), 0)"  # noqa: E731
+    else:
+        metric = lambda key: f"COALESCE(CAST(json_extract(run_data, '$.metrics.{key}') AS BIGINT), 0)"  # noqa: E731
+
+    organization_filter = ""
+    params: dict[str, object] = {
+        "day_cutoff": int(datetime.now(UTC).timestamp()) - 86_400,
+        "week_cutoff": int(datetime.now(UTC).timestamp()) - 604_800,
+    }
+    if principal.organization_id is not None:
+        organization_filter = (
+            "WHERE EXISTS (SELECT 1 FROM account_directory ad "
+            "WHERE replace(CAST(ad.user_id AS TEXT), '-', '') = replace(CAST(r.user_id AS TEXT), '-', '') "
+            "AND CAST(ad.organization_id AS TEXT) = :organization_id)"
+        )
+        params["organization_id"] = str(principal.organization_id)
+
+    input_tokens = metric("input_tokens")
+    output_tokens = metric("output_tokens")
+    total_tokens = metric("total_tokens")
+    row = (
+        await db.execute(
+            text(
+                f"""
+                SELECT
+                    COUNT(*) AS runs,
+                    COALESCE(SUM({input_tokens}), 0) AS input_tokens,
+                    COALESCE(SUM({output_tokens}), 0) AS output_tokens,
+                    COALESCE(SUM({total_tokens}), 0) AS total_tokens,
+                    COALESCE(SUM(CASE WHEN created_at >= :day_cutoff THEN {total_tokens} ELSE 0 END), 0) AS day_tokens,
+                    COALESCE(SUM(CASE WHEN created_at >= :week_cutoff THEN {total_tokens} ELSE 0 END), 0) AS week_tokens
+                FROM {table} r
+                {organization_filter}
+                """
+            ),
+            params,
+        )
+    ).one()
+    runtime = await get_runtime_config(db)
+    estimated_cost = float(row.input_tokens or 0) * runtime.input_token_price + float(
+        row.output_tokens or 0
+    ) * runtime.output_token_price
+    return {
+        "runs": int(row.runs or 0),
+        "input_tokens": int(row.input_tokens or 0),
+        "output_tokens": int(row.output_tokens or 0),
+        "total_tokens": int(row.total_tokens or 0),
+        "last_24h_tokens": int(row.day_tokens or 0),
+        "last_7d_tokens": int(row.week_tokens or 0),
+        "estimated_cost_usd": round(estimated_cost, 6),
+    }
+
+
 @router.get("/me")
 async def admin_me(principal: AdminPrincipal = Depends(get_admin_principal)) -> dict:
     return {
@@ -123,6 +181,7 @@ async def overview(
             .limit(8)
         )
     ).all()
+    usage = await _token_usage(principal, db)
     return {
         "users": totals[0] or 0,
         "active_users": totals[1] or 0,
@@ -130,6 +189,7 @@ async def overview(
         "campus_connected": totals[3] or 0,
         "agents": statuses,
         "resident_agents": get_pool().size(),
+        "usage": usage,
         "attention": [
             {
                 "user_id": str(row[0]),
