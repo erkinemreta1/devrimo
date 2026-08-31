@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -259,10 +259,40 @@ function AuditPanel({ principal }: { principal: AdminPrincipal }) {
 }
 
 function AccessPanel() {
-  const { pick } = useLocale(); const client = useQueryClient(); const [userId, setUserId] = useState(""); const [role, setRole] = useState("campus_admin"); const [reason, setReason] = useState("");
+  const { pick } = useLocale(); const client = useQueryClient(); const [userId, setUserId] = useState(""); const [selectedLabel, setSelectedLabel] = useState(""); const [role, setRole] = useState("campus_admin"); const [reason, setReason] = useState("");
   const query = useQuery({ queryKey: ["admin", "memberships"], queryFn: () => adminGet<{ items: Array<{ user_id: string; email: string | null; role: string; organization_id: string | null; bootstrap: boolean }> }>("memberships") });
-  const mutation = useMutation({ mutationFn: () => adminMutate(`memberships/${userId}`, "PUT", { user_id: userId, role, organization_id: null, reason }), onSuccess: () => { toast.success(pick({ tr: "Yönetici rolü kaydedildi", en: "Admin role saved" })); setUserId(""); setReason(""); void client.invalidateQueries({ queryKey: ["admin", "memberships"] }); }, onError: (error) => toast.error(error.message) });
-  return <div className="grid gap-4 xl:grid-cols-[1fr_360px]"><Card><CardHeader><CardTitle>{pick({ tr: "Üyelikler", en: "Memberships" })}</CardTitle></CardHeader><CardContent className="space-y-2">{query.data?.items.map((item) => <div key={item.user_id} className="flex items-center justify-between rounded-lg border p-3"><div><p className="font-medium">{item.email ?? item.user_id}</p><p className="text-xs text-muted-foreground">{item.user_id}</p></div><div className="flex gap-2"><StatusBadge value={item.role} />{item.bootstrap && <Badge variant="outline">bootstrap</Badge>}</div></div>)}{!query.data?.items.length && <Empty text={pick({ tr: "Veritabanında yönetici üyeliği yok.", en: "No database admin memberships." })} />}</CardContent></Card><Card><CardHeader><CardTitle>{pick({ tr: "Rol ata", en: "Assign role" })}</CardTitle><CardDescription>{pick({ tr: "Kullanıcı UUID'si hesap dizininde bulunmalıdır.", en: "The user UUID must exist in the account directory." })}</CardDescription></CardHeader><CardContent><form className="space-y-3" onSubmit={(event) => { event.preventDefault(); mutation.mutate(); }}><div><Label htmlFor="member-id">User ID</Label><Input id="member-id" value={userId} onChange={(event) => setUserId(event.target.value)} /></div><div><Label htmlFor="member-role">Role</Label><select id="member-role" value={role} onChange={(event) => setRole(event.target.value)} className="mt-1 h-9 w-full rounded-lg border bg-background px-3 text-sm"><option value="campus_admin">campus admin</option><option value="operator">operator</option><option value="super_admin">super admin</option></select></div><div><Label htmlFor="member-reason">{pick({ tr: "Gerekçe", en: "Reason" })}</Label><Textarea id="member-reason" value={reason} onChange={(event) => setReason(event.target.value)} /></div><Button type="submit" disabled={!userId || reason.length < 3 || mutation.isPending}>{pick({ tr: "Kaydet", en: "Save" })}</Button></form></CardContent></Card></div>;
+  const mutation = useMutation({ mutationFn: () => adminMutate(`memberships/${userId}`, "PUT", { user_id: userId, role, organization_id: null, reason }), onSuccess: () => { toast.success(pick({ tr: "Yönetici rolü kaydedildi", en: "Admin role saved" })); setUserId(""); setSelectedLabel(""); setReason(""); void client.invalidateQueries({ queryKey: ["admin", "memberships"] }); }, onError: (error) => toast.error(error.message) });
+  return <div className="grid gap-4 xl:grid-cols-[1fr_360px]"><Card><CardHeader><CardTitle>{pick({ tr: "Üyelikler", en: "Memberships" })}</CardTitle></CardHeader><CardContent className="space-y-2">{query.data?.items.map((item) => <div key={item.user_id} className="flex items-center justify-between rounded-lg border p-3"><div><p className="font-medium">{item.email ?? item.user_id}</p><p className="text-xs text-muted-foreground">{item.user_id}</p></div><div className="flex gap-2"><StatusBadge value={item.role} />{item.bootstrap && <Badge variant="outline">bootstrap</Badge>}</div></div>)}{!query.data?.items.length && <Empty text={pick({ tr: "Veritabanında yönetici üyeliği yok.", en: "No database admin memberships." })} />}</CardContent></Card><Card><CardHeader><CardTitle>{pick({ tr: "Rol ata", en: "Assign role" })}</CardTitle><CardDescription>{pick({ tr: "Ada veya e-postaya göre ara, ardından bir rol seç.", en: "Search by name or email, then pick a role." })}</CardDescription></CardHeader><CardContent><form className="space-y-3" onSubmit={(event) => { event.preventDefault(); mutation.mutate(); }}><div><Label htmlFor="member-search">{pick({ tr: "Kullanıcı", en: "User" })}</Label><UserPicker id="member-search" selectedLabel={selectedLabel} onSelect={(user) => { setUserId(user.user_id); setSelectedLabel(user.email ?? user.display_name ?? user.user_id); }} onClear={() => { setUserId(""); setSelectedLabel(""); }} /></div><div><Label htmlFor="member-role">Role</Label><select id="member-role" value={role} onChange={(event) => setRole(event.target.value)} className="mt-1 h-9 w-full rounded-lg border bg-background px-3 text-sm"><option value="campus_admin">campus admin</option><option value="operator">operator</option><option value="super_admin">super admin</option></select></div><div><Label htmlFor="member-reason">{pick({ tr: "Gerekçe", en: "Reason" })}</Label><Textarea id="member-reason" value={reason} onChange={(event) => setReason(event.target.value)} /></div><Button type="submit" disabled={!userId || reason.length < 3 || mutation.isPending}>{pick({ tr: "Kaydet", en: "Save" })}</Button></form></CardContent></Card></div>;
+}
+
+function UserPicker({ id, selectedLabel, onSelect, onClear }: { id: string; selectedLabel: string; onSelect: (user: AdminUser) => void; onClear: () => void }) {
+  const { pick } = useLocale();
+  const [term, setTerm] = useState("");
+  const [debounced, setDebounced] = useState("");
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    const handle = setTimeout(() => setDebounced(term), 300);
+    return () => clearTimeout(handle);
+  }, [term]);
+  const query = useQuery({ queryKey: ["admin", "user-search", debounced], queryFn: () => adminGet<{ items: AdminUser[] }>(`users?q=${encodeURIComponent(debounced)}`), enabled: debounced.trim().length >= 2 });
+  if (selectedLabel) {
+    return <div className="mt-1 flex items-center justify-between rounded-lg border bg-muted/30 px-3 py-2 text-sm"><span className="font-medium">{selectedLabel}</span><Button type="button" variant="ghost" size="sm" onClick={onClear}>{pick({ tr: "Değiştir", en: "Change" })}</Button></div>;
+  }
+  return (
+    <div className="relative">
+      <Input id={id} value={term} onChange={(event) => { setTerm(event.target.value); setOpen(true); }} onFocus={() => setOpen(true)} onBlur={() => setTimeout(() => setOpen(false), 150)} placeholder={pick({ tr: "Ad veya e-posta ara", en: "Search name or email" })} autoComplete="off" />
+      {open && debounced.trim().length >= 2 && <div className="absolute z-10 mt-1 w-full rounded-lg border bg-popover shadow-md">
+        {query.isLoading && <p className="p-3 text-sm text-muted-foreground">{pick({ tr: "Aranıyor…", en: "Searching…" })}</p>}
+        {!query.isLoading && !query.data?.items.length && <p className="p-3 text-sm text-muted-foreground">{pick({ tr: "Eşleşen kullanıcı yok.", en: "No matching users." })}</p>}
+        {query.data?.items.slice(0, 8).map((user) => (
+          <button key={user.user_id} type="button" className="flex w-full flex-col items-start px-3 py-2 text-left text-sm hover:bg-muted/60" onMouseDown={(event) => event.preventDefault()} onClick={() => { onSelect(user); setTerm(""); setOpen(false); }}>
+            <span className="font-medium">{user.display_name || user.email || user.user_id}</span>
+            {user.email && <span className="text-xs text-muted-foreground">{user.email}</span>}
+          </button>
+        ))}
+      </div>}
+    </div>
+  );
 }
 
 function RuntimePanel() {
