@@ -42,8 +42,13 @@ def _json_value(value: Any) -> Any:
         # tool's actual JSON payload.  Unwrap a single textual result so every
         # schedule endpoint exposes the same plain data shape.
         content = value.get("content")
-        if isinstance(content, (str, dict)):
+        if isinstance(content, dict):
             return _json_value(content)
+        if isinstance(content, str):
+            try:
+                return _json_value(json.loads(content))
+            except json.JSONDecodeError:
+                pass
         if isinstance(content, list):
             texts = [item.get("text") for item in content if isinstance(item, dict) and isinstance(item.get("text"), str)]
             if len(texts) == 1:
@@ -290,8 +295,10 @@ async def course_sections(
 ):
     compact_course = course_code.upper().replace(" ", "").replace("-", "")
     if compact_course.startswith(department.upper()):
-        # Keep METU's separator zero: department 567 + course 0201.
-        compact_course = compact_course[len(department):] or "0"
+        # The catalog's seven-digit display code is department + separator
+        # zero + the three-digit course number. The form receives department
+        # separately, so its course field is the final three digits.
+        compact_course = compact_course[len(department):].lstrip("0") or "0"
     data = await _call_course_info(
             db,
             user,
