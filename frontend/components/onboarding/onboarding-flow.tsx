@@ -4,9 +4,13 @@ import { useEffect, useState } from "react";
 import {
   ArrowLeftIcon,
   ArrowRightIcon,
+  BookOpenCheckIcon,
   CheckCircle2Icon,
+  GraduationCapIcon,
   Loader2Icon,
   LockIcon,
+  MailIcon,
+  ShieldCheckIcon,
   TriangleAlertIcon,
 } from "lucide-react";
 import { BrandMark } from "@/components/brand-mark";
@@ -16,24 +20,30 @@ import { Label } from "@/components/ui/label";
 import { useLocale } from "@/components/locale-provider";
 import { useCampus } from "@/hooks/useCampus";
 import { useProfile } from "@/hooks/useProfile";
-import { CampusToolToggle } from "@/components/onboarding/campus-tool-toggle";
+import { DataAccessChoice } from "@/components/settings/data-access-choice";
 import { StepIndicator } from "@/components/onboarding/step-indicator";
 import { ONBOARDING_STEPS, stepIndex, type OnboardingStep } from "@/components/onboarding/steps";
-import type { CampusTool } from "@/lib/types";
 import { captureError, captureProductEvent } from "@/components/posthog-analytics";
+
+const CORE_ACCESS = ["sais", "course_info"];
+
+type PrivacyChoices = {
+  odtuclass: boolean;
+  webmail: boolean;
+};
 
 const STARTER_PROMPTS = {
   tr: [
-    "Bu dönem ekle-bırak son günü ne zaman?",
-    "Bu haftaki ODTÜClass duyurularını özetle",
-    "Transkriptimden genel ortalamamı çıkar",
-    "Yaklaşan ödev teslimlerimi listele",
+    "Programımdaki boşluklara göre haftalık çalışma planı yap",
+    "Bu dönem yaklaşan önemli akademik tarihleri sırala",
+    "CENG 334 için ön koşulları ve açılan şubeleri karşılaştır",
+    "Bu akşam sessiz çalışabileceğim kampüs seçeneklerini öner",
   ],
   en: [
-    "When is the add-drop deadline this semester?",
-    "Summarize this week's ODTÜClass announcements",
-    "What is my CGPA from my transcript?",
-    "List my upcoming assignment deadlines",
+    "Build a weekly study plan around the gaps in my schedule",
+    "List the important academic dates coming up this semester",
+    "Compare the prerequisites and available sections for CENG 334",
+    "Suggest quiet places on campus where I can study tonight",
   ],
 };
 
@@ -49,7 +59,7 @@ const STARTER_PROMPTS = {
 export function OnboardingFlow({ onDone }: { onDone?: () => void }) {
   const { pick, locale, setLocale } = useLocale();
   const { profile, update } = useProfile();
-  const { connection, tools, connect, isLoading: campusLoading } = useCampus();
+  const { connection, connect } = useCampus();
 
   // Every field below is draft-or-server: `null` means the student hasn't
   // touched it, so the stored value shows through. Derived rather than synced
@@ -59,7 +69,7 @@ export function OnboardingFlow({ onDone }: { onDone?: () => void }) {
   const [displayNameDraft, setDisplayNameDraft] = useState<string | null>(null);
   const [usernameDraft, setUsernameDraft] = useState<string | null>(null);
   const [password, setPassword] = useState("");
-  const [selected, setSelected] = useState<string[] | null>(null);
+  const [privacyDraft, setPrivacyDraft] = useState<PrivacyChoices | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
 
@@ -69,13 +79,16 @@ export function OnboardingFlow({ onDone }: { onDone?: () => void }) {
   const displayName = displayNameDraft ?? profile?.display_name ?? "";
   const username = usernameDraft ?? connection?.metu_username ?? "";
 
-  // Not manually memoized: the React Compiler does it, and a hand-written
-  // dependency list here reads `connection?.enabled_tools` where the compiler
-  // infers `connection`, which makes it bail out of optimizing the component.
-  const defaultSelection = connection?.enabled_tools?.length
-    ? connection.enabled_tools
-    : tools.filter((tool: CampusTool) => tool.default_enabled).map((tool) => tool.id);
-  const enabledTools = selected ?? defaultSelection;
+  const savedPrivacy: PrivacyChoices = {
+    odtuclass: connection?.connected ? connection.enabled_tools.includes("odtuclass") : false,
+    webmail: connection?.connected ? connection.enabled_tools.includes("webmail") : false,
+  };
+  const privacy = privacyDraft ?? savedPrivacy;
+  const enabledAccess = [
+    ...CORE_ACCESS,
+    ...(privacy.odtuclass ? ["odtuclass"] : []),
+    ...(privacy.webmail ? ["webmail"] : []),
+  ];
 
   const index = ONBOARDING_STEPS.indexOf(step);
   const busy = connect.isPending || update.isPending;
@@ -110,7 +123,7 @@ export function OnboardingFlow({ onDone }: { onDone?: () => void }) {
         metu_username: username.trim(),
         ...(password ? { metu_password: password } : {}),
         locale,
-        enabled_tools: enabledTools,
+        enabled_tools: enabledAccess,
         skip_verification: skipVerification,
       });
       // Never keep the password around after it has been stored.
@@ -127,7 +140,7 @@ export function OnboardingFlow({ onDone }: { onDone?: () => void }) {
       if (!result.verified_at && result.verification_error) {
         setWarning(result.verification_error);
       }
-      goTo("tools");
+      goTo("privacy");
     } catch (error) {
       captureProductEvent("onboarding_connection_result", {
         result: "error",
@@ -143,7 +156,7 @@ export function OnboardingFlow({ onDone }: { onDone?: () => void }) {
     }
   }
 
-  async function saveToolSelection() {
+  async function savePrivacyChoices() {
     setFormError(null);
     if (!connection?.connected) {
       goTo("ready");
@@ -153,30 +166,30 @@ export function OnboardingFlow({ onDone }: { onDone?: () => void }) {
       await connect.mutateAsync({
         metu_username: username.trim() || connection.metu_username || "",
         locale,
-        enabled_tools: enabledTools,
+        enabled_tools: enabledAccess,
       });
       captureProductEvent("onboarding_tool_selection_saved", {
-        tool_count: enabledTools.length,
+        tool_count: enabledAccess.length,
         result: "success",
       });
       captureProductEvent("campus_tools_changed", {
         source: "onboarding",
-        tool_count: enabledTools.length,
+        tool_count: enabledAccess.length,
         result: "success",
       });
       goTo("ready");
     } catch (error) {
       captureProductEvent("onboarding_tool_selection_saved", {
-        tool_count: enabledTools.length,
+        tool_count: enabledAccess.length,
         result: "error",
       });
       captureProductEvent("campus_tools_changed", {
         source: "onboarding",
-        tool_count: enabledTools.length,
+        tool_count: enabledAccess.length,
         result: "error",
       });
       captureError(error, { source: "onboarding_tool_selection" });
-      setFormError(error instanceof Error ? error.message : "Could not save your tool selection.");
+      setFormError(error instanceof Error ? error.message : "Could not save your data-access choices.");
     }
   }
 
@@ -275,8 +288,8 @@ export function OnboardingFlow({ onDone }: { onDone?: () => void }) {
           </h1>
           <p className="mt-2 text-sm leading-6 text-muted-foreground">
             {pick({
-              tr: "Kampüs araçları ODTÜ sistemlerine senin adına giriş yapar, bu yüzden ODTÜ kullanıcı adın ve şifren gerekiyor.",
-              en: "The campus tools sign in to METU systems as you, so they need your METU username and password.",
+              tr: "Ders programın, transkriptin ve ders kataloğun için ODTÜ hesabını bağlayabilirsin. ODTÜClass ve e-posta erişimini sonraki adımda ayrıca seçersin.",
+              en: "Connect your METU account for your schedule, transcript, and course catalog. You'll choose ODTÜClass and email access separately in the next step.",
             })}
           </p>
 
@@ -285,8 +298,8 @@ export function OnboardingFlow({ onDone }: { onDone?: () => void }) {
             <div className="text-xs leading-5 text-muted-foreground">
               <p>
                 {pick({
-                  tr: "Şifren şifrelenerek saklanır ve yalnızca sana ait çalışma alanının içindeki kampüs araçlarına verilir. Arayüze bir daha asla geri gönderilmez, asistanın sohbet geçmişine yazılmaz.",
-                  en: "Your password is stored encrypted and handed only to the campus tools inside your own workspace. It is never sent back to this interface and never written into the assistant's chat history.",
+                  tr: "Şifren şifrelenerek saklanır ve yalnızca senin ODTÜ bağlantın için kullanılır. Arayüze bir daha geri gönderilmez, asistanın sohbet geçmişine yazılmaz.",
+                  en: "Your password is stored encrypted and used only for your own METU connection. It is never sent back to this interface or written into chat history.",
                 })}
               </p>
               <p className="mt-2">
@@ -345,7 +358,7 @@ export function OnboardingFlow({ onDone }: { onDone?: () => void }) {
                 <ArrowLeftIcon /> {pick({ tr: "Geri", en: "Back" })}
               </Button>
               <div className="flex items-center gap-2">
-                <Button type="button" variant="ghost" size="sm" onClick={() => goTo("tools")} disabled={busy}>
+                <Button type="button" variant="ghost" size="sm" onClick={() => goTo("privacy")} disabled={busy}>
                   {pick({ tr: "Şimdilik geç", en: "Skip for now" })}
                 </Button>
                 <Button type="submit" disabled={busy}>
@@ -358,15 +371,14 @@ export function OnboardingFlow({ onDone }: { onDone?: () => void }) {
         </section>
       ) : null}
 
-      {step === "tools" ? (
+      {step === "privacy" ? (
         <section className="flex flex-1 flex-col">
-          <h1 className="text-2xl font-semibold tracking-tight">
-            {pick({ tr: "Kampüs araçlarını seç", en: "Choose your campus tools" })}
-          </h1>
+          <div className="flex items-center gap-2 text-primary"><ShieldCheckIcon className="size-5" /><span className="text-xs font-semibold tracking-[0.16em] uppercase">{pick({ tr: "Gizlilik seçimi", en: "Privacy choices" })}</span></div>
+          <h1 className="mt-2 text-2xl font-semibold tracking-tight">{pick({ tr: "Hangi bilgilere erişebilir?", en: "Which information can be used?" })}</h1>
           <p className="mt-2 text-sm leading-6 text-muted-foreground">
             {pick({
-              tr: "Asistanın hangi ODTÜ sistemlerine ulaşabileceğine sen karar veriyorsun. Bunları sonradan Ayarlar'dan değiştirebilirsin.",
-              en: "You decide which METU systems the assistant can reach. You can change these later in Settings.",
+              tr: "Ders programı ve akademik kayıt bağlantının temel parçasıdır. ODTÜClass ve e-posta ise tamamen isteğe bağlıdır.",
+              en: "Schedule and academic records are the core connection. ODTÜClass and email are entirely optional.",
             })}
           </p>
 
@@ -380,35 +392,19 @@ export function OnboardingFlow({ onDone }: { onDone?: () => void }) {
           {!connection?.connected ? (
             <p className="mt-4 rounded-xl bg-muted/50 p-3 text-xs leading-5 text-muted-foreground">
               {pick({
-                tr: "ODTÜ hesabını bağlamadın, bu yüzden bu araçlar şimdilik çalışmaz. Seçimin kaydedilir; hesabını Ayarlar'dan bağladığında devreye girerler.",
-                en: "You haven't connected your METU account, so these tools won't run yet. Your choice is saved and they'll switch on once you connect from Settings.",
+                tr: "ODTÜ hesabını şimdilik bağlamadın. Bu adımı daha sonra Ayarlar'dan tamamlayabilirsin.",
+                en: "You skipped connecting your METU account for now. You can complete this later in Settings.",
               })}
             </p>
           ) : null}
 
-          <div className="mt-5 flex flex-col gap-2.5">
-            {campusLoading ? (
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <Loader2Icon className="size-4 animate-spin" />
-                {pick({ tr: "Araçlar yükleniyor…", en: "Loading tools…" })}
-              </div>
-            ) : (
-              tools.map((tool) => (
-                <CampusToolToggle
-                  key={tool.id}
-                  tool={tool}
-                  checked={enabledTools.includes(tool.id)}
-                  disabled={busy}
-                  onChange={(next) =>
-                    setSelected(
-                      next
-                        ? [...enabledTools, tool.id]
-                        : enabledTools.filter((id) => id !== tool.id),
-                    )
-                  }
-                />
-              ))
-            )}
+          <div className="mt-5 flex flex-col gap-3">
+            <div className="grid grid-cols-[auto_1fr] gap-3 rounded-xl border border-primary/20 bg-primary/[0.035] p-4">
+              <span className="grid size-9 place-items-center rounded-lg bg-primary/10 text-primary"><BookOpenCheckIcon className="size-4" /></span>
+              <div><p className="text-sm font-semibold">{pick({ tr: "Ders programı ve akademik kayıt", en: "Schedule and academic record" })}</p><p className="mt-1 text-xs leading-5 text-muted-foreground">{pick({ tr: "Program, transkript, not ortalaması ve ders kataloğu. Salt okunur ve hesap bağlantısına dahildir.", en: "Schedule, transcript, GPA, and course catalog. Read-only and included with the account connection." })}</p></div>
+            </div>
+            <DataAccessChoice id="onboarding-odtuclass" icon={GraduationCapIcon} title="ODTÜClass" description={pick({ tr: "Kayıtlı dersler, duyurular, izlenceler ve teslim tarihleri.", en: "Enrolled courses, announcements, syllabi, and deadlines." })} detail={pick({ tr: "Salt okunur. İzin vermediğin sürece erişilmez.", en: "Read-only. It is not accessed unless you allow it." })} checked={privacy.odtuclass} disabled={busy || !connection?.connected} optionalLabel={pick({ tr: "İsteğe bağlı", en: "Optional" })} onCheckedChange={(checked) => setPrivacyDraft({ ...privacy, odtuclass: checked })} />
+            <DataAccessChoice id="onboarding-webmail" icon={MailIcon} title={pick({ tr: "ODTÜ e-postası", en: "METU email" })} description={pick({ tr: "E-postaları okuma ve arama; ileti gönderme veya yanıtlama.", en: "Read and search email; send or reply to messages." })} detail={pick({ tr: "Gönderme ve yanıtlama her zaman tam iletiyi gösteren ayrı onay ister. Silme, taşıma ve iletme yapılamaz.", en: "Sending and replying always require separate approval showing the exact message. Deleting, moving, and forwarding are unavailable." })} checked={privacy.webmail} disabled={busy || !connection?.connected} optionalLabel={pick({ tr: "İsteğe bağlı", en: "Optional" })} onCheckedChange={(checked) => setPrivacyDraft({ ...privacy, webmail: checked })} />
           </div>
 
           {formError ? <p className="mt-3 text-sm text-destructive">{formError}</p> : null}
@@ -417,7 +413,7 @@ export function OnboardingFlow({ onDone }: { onDone?: () => void }) {
             <Button type="button" variant="ghost" size="sm" onClick={() => goTo("connect")} disabled={busy}>
               <ArrowLeftIcon /> {pick({ tr: "Geri", en: "Back" })}
             </Button>
-            <Button type="button" onClick={() => void saveToolSelection()} disabled={busy}>
+            <Button type="button" onClick={() => void savePrivacyChoices()} disabled={busy}>
               {connect.isPending ? <Loader2Icon className="animate-spin" /> : null}
               {pick({ tr: "Devam et", en: "Continue" })} <ArrowRightIcon />
             </Button>
@@ -439,7 +435,7 @@ export function OnboardingFlow({ onDone }: { onDone?: () => void }) {
               : pick({ tr: "Hadi başlayalım", en: "Let's get started" })}
           </h1>
 
-          <ActiveToolSummary tools={tools} enabled={enabledTools} connected={Boolean(connection?.connected)} />
+          <PrivacySummary privacy={privacy} connected={Boolean(connection?.connected)} />
 
           <p className="mt-6 text-sm font-medium">{pick({ tr: "Şunları deneyebilirsin:", en: "Try asking:" })}</p>
           <ul className="mt-2 flex flex-col gap-1.5">
@@ -453,7 +449,7 @@ export function OnboardingFlow({ onDone }: { onDone?: () => void }) {
           {formError ? <p className="mt-3 text-sm text-destructive">{formError}</p> : null}
 
           <div className="mt-6 flex items-center justify-between gap-3">
-            <Button type="button" variant="ghost" size="sm" onClick={() => goTo("tools")} disabled={busy}>
+            <Button type="button" variant="ghost" size="sm" onClick={() => goTo("privacy")} disabled={busy}>
               <ArrowLeftIcon /> {pick({ tr: "Geri", en: "Back" })}
             </Button>
             <Button type="button" onClick={() => void finish()} disabled={busy}>
@@ -467,24 +463,21 @@ export function OnboardingFlow({ onDone }: { onDone?: () => void }) {
   );
 }
 
-function ActiveToolSummary({
-  tools,
-  enabled,
+function PrivacySummary({
+  privacy,
   connected,
 }: {
-  tools: CampusTool[];
-  enabled: string[];
+  privacy: PrivacyChoices;
   connected: boolean;
 }) {
-  const { pick, locale } = useLocale();
-  const active = tools.filter((tool) => enabled.includes(tool.id));
+  const { pick } = useLocale();
 
-  if (!connected || active.length === 0) {
+  if (!connected) {
     return (
       <p className="mt-3 text-sm leading-6 text-muted-foreground">
         {pick({
-          tr: "Asistanın genel bilgisiyle çalışmaya hazır. Kampüs araçlarını istediğin zaman Ayarlar'dan açabilirsin.",
-          en: "Your assistant is ready to work from general knowledge. You can switch the campus tools on any time from Settings.",
+          tr: "Asistanın genel bilgiyle çalışmaya hazır. ODTÜ bağlantısını ve isteğe bağlı veri erişimlerini daha sonra Ayarlar'dan ekleyebilirsin.",
+          en: "Your assistant is ready to work from general knowledge. You can add your METU connection and optional data access later in Settings.",
         })}
       </p>
     );
@@ -494,19 +487,14 @@ function ActiveToolSummary({
     <>
       <p className="mt-3 text-sm leading-6 text-muted-foreground">
         {pick({
-          tr: "Asistanın artık şu ODTÜ sistemlerine ulaşabiliyor:",
-          en: "Your assistant can now reach these METU systems:",
+          tr: "Bağlantın hazır. İzin verdiğin bilgi alanları:",
+          en: "Your connection is ready. Information you allowed:",
         })}
       </p>
-      <ul className="mt-3 flex flex-wrap gap-1.5">
-        {active.map((tool) => (
-          <li
-            key={tool.id}
-            className="rounded-full border border-primary/30 bg-primary/5 px-2.5 py-1 text-xs font-medium text-foreground"
-          >
-            {locale === "tr" ? tool.name_tr : tool.name_en}
-          </li>
-        ))}
+      <ul className="mt-3 flex flex-wrap gap-2">
+        <li className="inline-flex items-center gap-1.5 rounded-lg border border-primary/20 bg-primary/5 px-2.5 py-1.5 text-xs font-medium"><BookOpenCheckIcon className="size-3.5 text-primary" />{pick({ tr: "Akademik kayıt", en: "Academic record" })}</li>
+        {privacy.odtuclass ? <li className="inline-flex items-center gap-1.5 rounded-lg border border-primary/20 bg-primary/5 px-2.5 py-1.5 text-xs font-medium"><GraduationCapIcon className="size-3.5 text-primary" />ODTÜClass</li> : null}
+        {privacy.webmail ? <li className="inline-flex items-center gap-1.5 rounded-lg border border-primary/20 bg-primary/5 px-2.5 py-1.5 text-xs font-medium"><MailIcon className="size-3.5 text-primary" />{pick({ tr: "ODTÜ e-postası", en: "METU email" })}</li> : null}
       </ul>
     </>
   );

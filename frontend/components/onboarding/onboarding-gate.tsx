@@ -9,10 +9,8 @@ import { OnboardingFlow } from "@/components/onboarding/onboarding-flow";
  * Shows the first-run wizard until the student has completed it.
  *
  * Deliberately wraps the provisioning gate rather than sitting inside it: the
- * wizard's whole purpose is to collect the campus credentials the agent
- * container is *built with*, so it has to finish before the container is
- * provisioned — otherwise every student's first container would be created
- * with no campus tools and immediately need rebuilding.
+ * wizard collects connection and privacy choices before the private assistant
+ * is prepared, so its first run already reflects the student's consent.
  *
  * A failed profile fetch falls through to the app instead of trapping the
  * student on a wizard they can't complete; onboarding is re-offered from

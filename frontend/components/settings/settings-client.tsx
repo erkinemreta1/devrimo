@@ -2,8 +2,17 @@
 
 import { useEffect } from "react";
 import { toast } from "sonner";
-import { BotIcon, BrainIcon, Loader2Icon, RotateCcwIcon, ShieldCheckIcon, Trash2Icon } from "lucide-react";
-import { useAgent } from "@/hooks/useAgent";
+import {
+  BrainIcon,
+  CableIcon,
+  ChevronRightIcon,
+  Loader2Icon,
+  RotateCcwIcon,
+  ShieldCheckIcon,
+  SlidersHorizontalIcon,
+  SparklesIcon,
+  Trash2Icon,
+} from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -22,202 +31,125 @@ import { useLocale } from "@/components/locale-provider";
 import { CampusConnectionCard } from "@/components/settings/campus-connection-card";
 import { useProfile } from "@/hooks/useProfile";
 import { useMemories } from "@/hooks/useMemories";
-import { captureProductEvent } from "@/components/posthog-analytics";
+import { captureError, captureProductEvent } from "@/components/posthog-analytics";
 
 export function SettingsClient() {
   const { pick } = useLocale();
-  const { agent, isLoading, ensureRunning, stop, destroy, refetch } = useAgent();
   const { update: updateProfile } = useProfile();
   const { memories, isLoading: memoriesLoading, clear: clearMemories } = useMemories();
 
-  // Settings is where a struggling student goes to disconnect or reset. Knowing
-  // they got here is the leading indicator for the churn events below it.
   useEffect(() => {
     captureProductEvent("settings_opened", {});
   }, []);
 
-  async function run(action: () => Promise<unknown>, success: string) {
+  async function clearAllMemories() {
     try {
-      await action();
-      toast.success(success);
-      await refetch();
+      await clearMemories.mutateAsync();
+      toast.success(pick({ tr: "Hatırlanan tercihlerin silindi.", en: "Remembered preferences cleared." }));
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Action failed");
+      captureError(error, { source: "settings_clear_memories" });
+      toast.error(error instanceof Error ? error.message : pick({ tr: "Tercihler silinemedi.", en: "Preferences could not be cleared." }));
     }
   }
 
+  async function reopenSetup() {
+    try {
+      await updateProfile.mutateAsync({ onboarding_completed: false, onboarding_step: "welcome" });
+      toast.success(pick({ tr: "Kurulum adımları tekrar açıldı.", en: "Setup steps reopened." }));
+    } catch (error) {
+      captureError(error, { source: "settings_reopen_setup" });
+      toast.error(error instanceof Error ? error.message : pick({ tr: "Kurulum açılamadı.", en: "Setup could not be reopened." }));
+    }
+  }
+
+  const navigation = [
+    { href: "#connection", icon: CableIcon, label: pick({ tr: "ODTÜ bağlantısı", en: "METU connection" }) },
+    { href: "#privacy", icon: ShieldCheckIcon, label: pick({ tr: "Veri erişimi", en: "Data access" }) },
+    { href: "#memory", icon: BrainIcon, label: pick({ tr: "Hatırlananlar", en: "Remembered items" }) },
+    { href: "#setup", icon: RotateCcwIcon, label: pick({ tr: "Kurulum", en: "Setup" }) },
+  ];
+
   return (
-    <div className="mx-auto flex w-full max-w-4xl flex-col gap-5 p-4 sm:p-6 lg:p-8">
-      <div className="motion-enter flex items-start gap-3 rounded-2xl border bg-card/70 p-4 shadow-sm sm:p-5">
-        <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary"><ShieldCheckIcon className="size-4" /></span>
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">{pick({ tr: "Ayarlar", en: "Settings" })}</h1>
-          <p className="mt-1 text-sm text-muted-foreground">{pick({ tr: "Bağlantılarını, hatırlanan tercihleri ve kişisel asistan çalışma alanını yönet.", en: "Manage your connections, remembered preferences, and private assistant workspace." })}</p>
+    <div className="mx-auto w-full max-w-6xl px-4 py-5 sm:px-6 sm:py-7 lg:px-8">
+      <header className="motion-enter relative overflow-hidden rounded-3xl border bg-card/85 p-5 shadow-sm sm:p-7">
+        <div className="absolute -right-12 -top-20 size-52 rounded-full bg-primary/8 blur-2xl" aria-hidden />
+        <div className="relative flex max-w-3xl items-start gap-4">
+          <span className="grid size-11 shrink-0 place-items-center rounded-2xl bg-primary text-primary-foreground shadow-[0_7px_0_#901129]"><SlidersHorizontalIcon className="size-5" /></span>
+          <div>
+            <Badge variant="outline" className="mb-3 border-primary/20 bg-primary/5 text-primary">{pick({ tr: "Kontrol sende", en: "You're in control" })}</Badge>
+            <h1 className="text-2xl font-semibold tracking-[-0.035em] sm:text-3xl">{pick({ tr: "Ayarlar ve gizlilik", en: "Settings and privacy" })}</h1>
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">{pick({ tr: "ODTÜ bağlantını, hangi bilgi kaynaklarının kullanılabileceğini ve asistanın hatırladıklarını tek yerde yönet.", en: "Manage your METU connection, which information sources may be used, and what the assistant remembers—all in one place." })}</p>
+          </div>
         </div>
-      </div>
+      </header>
 
-      <CampusConnectionCard />
+      <div className="mt-6 grid items-start gap-6 lg:grid-cols-[14rem_minmax(0,1fr)]">
+        <aside className="hidden lg:sticky lg:top-6 lg:block">
+          <nav aria-label={pick({ tr: "Ayar bölümleri", en: "Settings sections" })} className="rounded-2xl border bg-card/70 p-2 shadow-sm">
+            {navigation.map(({ href, icon: Icon, label }) => (
+              <a key={href} href={href} className="group flex min-h-11 items-center gap-3 rounded-xl px-3 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none">
+                <Icon className="size-4 text-primary" />
+                <span className="flex-1">{label}</span>
+                <ChevronRightIcon className="size-3.5 opacity-0 transition-opacity group-hover:opacity-60" />
+              </a>
+            ))}
+          </nav>
+          <div className="mt-3 rounded-2xl border border-primary/15 bg-primary/[0.035] p-4">
+            <div className="flex items-center gap-2 text-sm font-semibold"><ShieldCheckIcon className="size-4 text-primary" />{pick({ tr: "Gizlilik özeti", en: "Privacy summary" })}</div>
+            <p className="mt-2 text-xs leading-5 text-muted-foreground">{pick({ tr: "E-posta ve ODTÜClass isteğe bağlıdır. Şifren gösterilmez; içerikler yönetici ekranlarına taşınmaz.", en: "Email and ODTÜClass are optional. Your password is never shown, and contents never appear in admin views." })}</p>
+          </div>
+        </aside>
 
-      <Card className="motion-enter surface-raised border-0 ring-1 ring-foreground/8 [animation-delay:60ms]">
-        <CardHeader className="border-b">
-          <div className="flex items-center gap-2"><span className="grid size-8 place-items-center rounded-lg bg-primary/10 text-primary"><BrainIcon className="size-4" /></span><CardTitle>{pick({ tr: "Hatırlanan tercihler", en: "Remembered preferences" })}</CardTitle></div>
-          <CardDescription>
-            {pick({
-              tr: "Asistan yalnızca açıkça hatırlamasını istediğin, hassas olmayan kalıcı tercihleri burada tutar.",
-              en: "The assistant keeps only durable, non-sensitive preferences you explicitly asked it to remember.",
-            })}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-4">
-          {memoriesLoading ? (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Loader2Icon className="size-4 animate-spin" />
-              {pick({ tr: "Tercihler yükleniyor…", en: "Loading preferences…" })}
-            </div>
-          ) : memories.length ? (
-            <ul className="space-y-2 text-sm">
-              {memories.map((memory) => (
-                <li key={memory.id} className="rounded-lg border bg-muted/30 px-3 py-2">
-                  {memory.content}
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="text-sm text-muted-foreground">
-              {pick({ tr: "Kayıtlı bir tercih yok.", en: "No preferences are saved." })}
-            </p>
-          )}
-          {memories.length ? (
-            <AlertDialog>
-              <AlertDialogTrigger render={<Button variant="outline" className="self-start" />}>
-                {pick({ tr: "Tümünü unut", en: "Forget all" })}
-              </AlertDialogTrigger>
-              <AlertDialogContent>
-                <AlertDialogHeader>
-                  <AlertDialogTitle>
-                    {pick({ tr: "Tüm tercihler unutulsun mu?", en: "Forget all preferences?" })}
-                  </AlertDialogTitle>
-                  <AlertDialogDescription>
-                    {pick({
-                      tr: "Bu işlem kayıtlı asistan tercihlerini kalıcı olarak siler; sohbet geçmişini silmez.",
-                      en: "This permanently clears saved assistant preferences, but does not delete chat history.",
-                    })}
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                  <AlertDialogCancel>{pick({ tr: "Vazgeç", en: "Cancel" })}</AlertDialogCancel>
-                  <AlertDialogAction
-                    disabled={clearMemories.isPending}
-                    onClick={() =>
-                      run(
-                        () => clearMemories.mutateAsync(),
-                        pick({ tr: "Kayıtlı tercihler silindi.", en: "Saved preferences cleared." }),
-                      )
-                    }
-                  >
-                    {clearMemories.isPending ? <Loader2Icon className="animate-spin" /> : null}
-                    {pick({ tr: "Tümünü unut", en: "Forget all" })}
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
-          ) : null}
-        </CardContent>
-      </Card>
+        <main className="min-w-0 space-y-5">
+          <CampusConnectionCard />
 
-      <Card className="motion-enter surface-raised border-0 ring-1 ring-foreground/8 [animation-delay:90ms]">
-        <CardHeader className="border-b">
-          <div className="flex items-center gap-2"><span className="grid size-8 place-items-center rounded-lg bg-primary/10 text-primary"><BotIcon className="size-4" /></span><CardTitle>{pick({ tr: "Asistan", en: "Assistant" })}</CardTitle></div>
-          <CardDescription>{pick({ tr: "Her hesap için yalıtılmış bir çalışma alanı oluşturulur. Silme işlemi bu alandaki verileri kaldırır.", en: "Each account has an isolated workspace. Removing it also deletes its workspace data." })}</CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-4">
-          {isLoading ? (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Loader2Icon className="size-4 animate-spin" />
-              {pick({ tr: "Asistan durumu yükleniyor…", en: "Loading assistant status…" })}
-            </div>
-          ) : agent ? (
-            <>
-              <div className="flex flex-wrap items-center gap-2">
-                <Badge>{agent.status}</Badge>
-                <span className="text-sm text-muted-foreground">ID {agent.id}</span>
+          <Card id="memory" className="motion-enter surface-raised scroll-mt-24 border-0 ring-1 ring-foreground/8 [animation-delay:70ms]">
+            <CardHeader className="border-b bg-muted/20">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="flex items-start gap-3">
+                  <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary"><BrainIcon className="size-4" /></span>
+                  <div><CardTitle>{pick({ tr: "Hatırlanan tercihler", en: "Remembered preferences" })}</CardTitle><CardDescription className="mt-1">{pick({ tr: "Yalnızca açıkça hatırlamasını istediğin, hassas olmayan tercihler burada tutulur.", en: "Only non-sensitive preferences you explicitly asked the assistant to remember are kept here." })}</CardDescription></div>
+                </div>
+                {!memoriesLoading ? <Badge variant="secondary">{memories.length} {pick({ tr: "kayıt", en: memories.length === 1 ? "item" : "items" })}</Badge> : null}
               </div>
-              {agent.status === "error" && agent.error_detail ? (
-                <p className="text-sm text-destructive">{agent.error_detail}</p>
-              ) : null}
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  variant="outline"
-                  disabled={ensureRunning.isPending || agent.status === "running"}
-                  onClick={() => run(() => ensureRunning.mutateAsync(), pick({ tr: "Asistan başlatıldı.", en: "Assistant started." }))}
-                >
-                  {pick({ tr: "Başlat", en: "Start" })}
-                </Button>
-                <Button
-                  variant="outline"
-                  disabled={stop.isPending || agent.status !== "running"}
-                  onClick={() => run(() => stop.mutateAsync(), pick({ tr: "Asistan durduruldu.", en: "Assistant stopped." }))}
-                >
-                  {pick({ tr: "Durdur", en: "Stop" })}
-                </Button>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {memoriesLoading ? (
+                <div className="flex min-h-28 items-center justify-center gap-2 text-sm text-muted-foreground"><Loader2Icon className="size-4 animate-spin" />{pick({ tr: "Hatırlananlar yükleniyor…", en: "Loading remembered items…" })}</div>
+              ) : memories.length ? (
+                <ul className="grid gap-2 sm:grid-cols-2">
+                  {memories.map((memory) => <li key={memory.id} className="rounded-xl border bg-background/55 px-4 py-3 text-sm leading-5">{memory.content}</li>)}
+                </ul>
+              ) : (
+                <div className="flex min-h-28 flex-col items-center justify-center rounded-xl border border-dashed bg-muted/15 px-4 text-center">
+                  <SparklesIcon className="size-5 text-primary" />
+                  <p className="mt-2 text-sm font-medium">{pick({ tr: "Henüz hatırlanan bir tercih yok", en: "Nothing is remembered yet" })}</p>
+                  <p className="mt-1 max-w-sm text-xs leading-5 text-muted-foreground">{pick({ tr: "Örneğin “Yanıtları kısa tut” dediğinde ve hatırlamasını istediğinde burada görünür.", en: "For example, an instruction such as “Keep answers concise” appears here when you ask it to remember." })}</p>
+                </div>
+              )}
+
+              {memories.length ? (
                 <AlertDialog>
-                  <AlertDialogTrigger render={<Button variant="destructive" />}><Trash2Icon />{pick({ tr: "Çalışma alanını sil", en: "Remove workspace" })}</AlertDialogTrigger>
+                  <AlertDialogTrigger render={<Button variant="outline" className="text-destructive" />}><Trash2Icon />{pick({ tr: "Tümünü unuttur", en: "Forget everything" })}</AlertDialogTrigger>
                   <AlertDialogContent>
-                    <AlertDialogHeader>
-                      <AlertDialogTitle>{pick({ tr: "Asistanın çalışma alanı silinsin mi?", en: "Remove this assistant workspace?" })}</AlertDialogTitle>
-                      <AlertDialogDescription>
-                        {pick({ tr: "Çalışma alanı durdurulur ve içindeki veriler silinir. Daha sonra yeniden oluşturabilirsin.", en: "This stops the workspace and deletes its data. You can create a fresh one later." })}
-                      </AlertDialogDescription>
-                    </AlertDialogHeader>
-                    <AlertDialogFooter>
-                      <AlertDialogCancel>{pick({ tr: "Vazgeç", en: "Cancel" })}</AlertDialogCancel>
-                      <AlertDialogAction
-                        onClick={() => run(() => destroy.mutateAsync(), pick({ tr: "Asistan çalışma alanı silindi.", en: "Assistant workspace removed." }))}
-                      >
-                        {pick({ tr: "Çalışma alanını sil", en: "Remove workspace" })}
-                      </AlertDialogAction>
-                    </AlertDialogFooter>
+                    <AlertDialogHeader><AlertDialogTitle>{pick({ tr: "Tüm tercihler unutulsun mu?", en: "Forget all preferences?" })}</AlertDialogTitle><AlertDialogDescription>{pick({ tr: "Hatırlanan tercihler kalıcı olarak silinir. Sohbet geçmişin ve ODTÜ bağlantın değişmez.", en: "Remembered preferences are permanently deleted. Chat history and your METU connection are unchanged." })}</AlertDialogDescription></AlertDialogHeader>
+                    <AlertDialogFooter><AlertDialogCancel>{pick({ tr: "Vazgeç", en: "Cancel" })}</AlertDialogCancel><AlertDialogAction variant="destructive" disabled={clearMemories.isPending} onClick={() => void clearAllMemories()}>{clearMemories.isPending ? <Loader2Icon className="animate-spin" /> : <Trash2Icon />}{pick({ tr: "Tümünü unuttur", en: "Forget everything" })}</AlertDialogAction></AlertDialogFooter>
                   </AlertDialogContent>
                 </AlertDialog>
-              </div>
-            </>
-          ) : (
-            <div className="flex flex-col items-start gap-3">
-              <p className="text-sm text-muted-foreground">{pick({ tr: "Bu hesap için henüz bir asistan çalışma alanı yok.", en: "This account does not have an assistant workspace yet." })}</p>
-              <Button onClick={() => run(() => ensureRunning.mutateAsync(), pick({ tr: "Asistan hazır.", en: "Assistant is ready." }))}>
-                {pick({ tr: "Asistanı hazırla", en: "Set up assistant" })}
-              </Button>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+              ) : null}
+            </CardContent>
+          </Card>
 
-      <Card className="motion-enter surface-raised border-0 ring-1 ring-foreground/8 [animation-delay:150ms]">
-        <CardHeader className="border-b">
-          <div className="flex items-center gap-2"><span className="grid size-8 place-items-center rounded-lg bg-muted text-muted-foreground"><RotateCcwIcon className="size-4" /></span><CardTitle>{pick({ tr: "Kurulum", en: "Setup" })}</CardTitle></div>
-          <CardDescription>
-            {pick({
-              tr: "Tanıtım adımlarını baştan görmek istersen tekrar başlatabilirsin. Kayıtlı ayarların silinmez.",
-              en: "Walk through the setup steps again if you want to revisit them. Nothing you've already saved is cleared.",
-            })}
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Button
-            variant="outline"
-            disabled={updateProfile.isPending}
-            onClick={() =>
-              run(
-                () => updateProfile.mutateAsync({ onboarding_completed: false, onboarding_step: "welcome" }),
-                pick({ tr: "Kurulum tekrar açıldı.", en: "Setup reopened." }),
-              )
-            }
-          >
-            {updateProfile.isPending ? <Loader2Icon className="animate-spin" /> : null}
-            {pick({ tr: "Kurulumu tekrar çalıştır", en: "Run setup again" })}
-          </Button>
-        </CardContent>
-      </Card>
+          <Card id="setup" className="motion-enter surface-raised scroll-mt-24 border-0 ring-1 ring-foreground/8 [animation-delay:110ms]">
+            <CardHeader className="border-b bg-muted/20">
+              <div className="flex items-start gap-3"><span className="grid size-9 shrink-0 place-items-center rounded-xl bg-muted text-muted-foreground"><RotateCcwIcon className="size-4" /></span><div><CardTitle>{pick({ tr: "Kurulumu yeniden gözden geçir", en: "Review setup again" })}</CardTitle><CardDescription className="mt-1">{pick({ tr: "Dil, hitap şekli, ODTÜ bağlantısı ve veri erişimi seçimlerini adım adım yeniden incele. Mevcut kayıtların silinmez.", en: "Review language, how you're addressed, your METU connection, and data-access choices step by step. Existing data is not deleted." })}</CardDescription></div></div>
+            </CardHeader>
+            <CardContent>
+              <Button variant="outline" disabled={updateProfile.isPending} onClick={() => void reopenSetup()}>{updateProfile.isPending ? <Loader2Icon className="animate-spin" /> : <RotateCcwIcon />}{pick({ tr: "Kurulum adımlarını aç", en: "Open setup steps" })}</Button>
+            </CardContent>
+          </Card>
+        </main>
+      </div>
     </div>
   );
 }

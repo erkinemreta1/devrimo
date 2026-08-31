@@ -1,35 +1,45 @@
 "use client";
 
 import { unstable_useComposerInput } from "@assistant-ui/react";
-import { Button } from "@/components/ui/button";
+import {
+  BookOpenCheckIcon,
+  CalendarDaysIcon,
+  LibraryIcon,
+  RouteIcon,
+  ShieldCheckIcon,
+} from "lucide-react";
 import { useLocale } from "@/components/locale-provider";
 
-const prompts = {
+const suggestions = {
   tr: [
-    "Bu dönem ekle-bırak son günü ne zaman?",
-    "Bu hafta için ders çalışma planı hazırla",
-    "Bu akşam kampüste nerede çalışabilirim?",
-    "Bu haftaki ODTÜClass duyurularını özetle",
+    { label: "Haftalık plan", prompt: "Programımdaki boşluklara göre bu hafta için gerçekçi bir çalışma planı yap", icon: CalendarDaysIcon },
+    { label: "Akademik takvim", prompt: "Bu dönem yaklaşan önemli akademik tarihleri sırala", icon: BookOpenCheckIcon },
+    { label: "Ders seçimi", prompt: "CENG 334 için ön koşulları ve açılan şubeleri karşılaştır", icon: LibraryIcon },
+    { label: "Kampüs yaşamı", prompt: "Bu akşam sessiz çalışabileceğim kampüs seçeneklerini öner", icon: RouteIcon },
   ],
   en: [
-    "When is the add-drop deadline this semester?",
-    "Build me a study plan for this week",
-    "Where can I study on campus tonight?",
-    "Summarize this week's ODTÜClass announcements",
+    { label: "Weekly plan", prompt: "Build a realistic study plan around the gaps in my schedule this week", icon: CalendarDaysIcon },
+    { label: "Academic calendar", prompt: "List the important academic dates coming up this semester", icon: BookOpenCheckIcon },
+    { label: "Course planning", prompt: "Compare the prerequisites and available sections for CENG 334", icon: LibraryIcon },
+    { label: "Campus life", prompt: "Suggest quiet places on campus where I can study tonight", icon: RouteIcon },
   ],
 };
 
 export function MetuWelcome() {
   const { pick } = useLocale();
   return (
-    <div className="relative mb-8 flex flex-col items-center px-4 text-center">
-      <h1 className="motion-enter text-2xl font-semibold tracking-tight sm:text-3xl">
-        {pick({ tr: "Bugün neyi birlikte çözelim?", en: "What can we solve today?" })}
+    <div className="relative mx-auto mb-7 flex max-w-2xl flex-col items-center px-4 text-center">
+      <div className="motion-enter mb-4 inline-flex items-center gap-2 rounded-full border border-primary/15 bg-primary/[0.045] px-3 py-1.5 text-xs font-medium text-primary">
+        <ShieldCheckIcon className="size-3.5" />
+        {pick({ tr: "Kişisel, kontrollü ve sana özel", en: "Personal, controlled, and private to you" })}
+      </div>
+      <h1 className="motion-enter text-3xl font-semibold tracking-[-0.045em] sm:text-4xl [animation-delay:45ms]">
+        {pick({ tr: "Bugün neyi kolaylaştıralım?", en: "What should we make easier today?" })}
       </h1>
-      <p className="motion-enter mt-2 max-w-md text-sm text-muted-foreground [animation-delay:70ms]">
+      <p className="motion-enter mt-3 max-w-xl text-sm leading-6 text-muted-foreground [animation-delay:90ms]">
         {pick({
-          tr: "Dersler, akademik takvim, kütüphane ve kampüs yaşamı için bağlamını bilen kişisel asistanın.",
-          en: "Your context-aware assistant for courses, the academic calendar, library resources, and campus life.",
+          tr: "Ders planlama, akademik tarihler ve kampüs yaşamı için yardım al. ODTÜClass ve e-posta bilgileri yalnızca Ayarlar'da izin verdiğinde kullanılır.",
+          en: "Get help with course planning, academic dates, and campus life. ODTÜClass and email information are used only when you allow them in Settings.",
         })}
       </p>
     </div>
@@ -38,23 +48,29 @@ export function MetuWelcome() {
 
 export function MetuStarterPrompts() {
   const { setText, send, isDisabled } = unstable_useComposerInput();
-  const { locale } = useLocale();
+  const { locale, pick } = useLocale();
 
   return (
-    <div className="flex w-full flex-wrap items-center justify-center gap-2 px-1 pb-1">
-      {prompts[locale].map((prompt, index) => (
-        <Button
-          key={prompt}
-          type="button"
-          variant="outline"
-          disabled={isDisabled}
-          className="motion-enter h-auto max-w-full rounded-full bg-gradient-to-b from-card to-background px-3.5 py-1.5 text-left text-sm font-normal whitespace-normal shadow-sm transition-[transform,background-color,border-color,box-shadow] duration-200 hover:-translate-y-0.5 hover:border-primary/30 hover:shadow-[0_8px_24px_rgb(227_24_55/10%)]"
-          style={{ animationDelay: `${220 + index * 55}ms` }}
-          onClick={() => { setText(prompt); send(); }}
-        >
-          {prompt}
-        </Button>
-      ))}
-    </div>
+    <section aria-label={pick({ tr: "Örnek sorular", en: "Example questions" })} className="w-full pb-1">
+      <p className="mb-2 px-1 text-xs font-medium text-muted-foreground">{pick({ tr: "Bir örnekle başla", en: "Start with an example" })}</p>
+      <div className="grid w-full gap-2 sm:grid-cols-2">
+        {suggestions[locale].map(({ label, prompt, icon: Icon }, index) => (
+          <button
+            key={prompt}
+            type="button"
+            disabled={isDisabled}
+            className="motion-enter group flex min-h-[4.5rem] items-start gap-3 rounded-xl border border-border/70 bg-card/80 p-3 text-left shadow-[0_8px_26px_rgb(70_48_35/5%)] transition-[transform,border-color,background-color,box-shadow] hover:-translate-y-0.5 hover:border-primary/25 hover:bg-card hover:shadow-[0_12px_30px_rgb(215_24_63/8%)] focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none disabled:pointer-events-none disabled:opacity-50"
+            style={{ animationDelay: `${180 + index * 45}ms` }}
+            onClick={() => { setText(prompt); send(); }}
+          >
+            <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-muted text-muted-foreground transition-colors group-hover:bg-primary/10 group-hover:text-primary"><Icon className="size-4" /></span>
+            <span className="min-w-0">
+              <span className="block text-[11px] font-semibold tracking-[0.08em] text-primary uppercase">{label}</span>
+              <span className="mt-1 block text-sm leading-5 text-foreground/90">{prompt}</span>
+            </span>
+          </button>
+        ))}
+      </div>
+    </section>
   );
 }

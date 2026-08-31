@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState, useSyncExternalStore } from "react";
 import { AssistantRuntimeProvider } from "@assistant-ui/react";
 import { AssistantChatTransport, useChatRuntime } from "@assistant-ui/ai-sdk";
 import type { DataUIPart, UIMessage } from "ai";
@@ -31,6 +31,28 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+import {
+  ResizableHandle,
+  ResizablePanel,
+  ResizablePanelGroup,
+} from "@/components/ui/resizable";
+import type { PanelImperativeHandle } from "react-resizable-panels";
+
+const DESKTOP_QUERY = "(min-width: 768px)";
+
+function subscribeToDesktop(callback: () => void) {
+  const query = window.matchMedia(DESKTOP_QUERY);
+  query.addEventListener("change", callback);
+  return () => query.removeEventListener("change", callback);
+}
+
+function useDesktopLayout() {
+  return useSyncExternalStore(
+    subscribeToDesktop,
+    () => window.matchMedia(DESKTOP_QUERY).matches,
+    () => false,
+  );
+}
 
 function toUiMessages(sessionId: string, messages: { role: string; content: string; id?: string }[]): UIMessage[] {
   return messages.map((message, index) => ({
@@ -242,6 +264,7 @@ function AssistantThread({
 
 export function ChatShell() {
   const { pick } = useLocale();
+  const desktop = useDesktopLayout();
   const { sessions, remove, refetch } = useChatSessions();
   const [threadId, setThreadId] = useState<string | undefined>(undefined);
   const [selectedSessionId, setSelectedSessionId] = useState<string | undefined>(undefined);
@@ -249,6 +272,8 @@ export function ChatShell() {
   const [chatKey, setChatKey] = useState(0);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const [mobileHistoryOpen, setMobileHistoryOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const sidebarPanelRef = useRef<PanelImperativeHandle | null>(null);
   const pendingDeleteSession = sessions.find((session) => session.id === pendingDeleteId);
 
   async function selectSession(sessionId: string) {
@@ -291,42 +316,78 @@ export function ChatShell() {
     }
   }
 
+  const assistantThread = (
+    <AssistantThread
+      key={chatKey}
+      threadId={threadId}
+      initialMessages={seedMessages}
+      onThreadReady={(nextId) => {
+        setThreadId(nextId);
+        if (!selectedSessionId && nextId) setSelectedSessionId(nextId);
+        void refetch();
+      }}
+    />
+  );
+
+  const requestDelete = (sessionId: string) => {
+    captureProductEvent("chat_delete_requested", {
+      was_active: selectedSessionId === sessionId,
+    });
+    setPendingDeleteId(sessionId);
+  };
+
   return (
-    <div className="flex h-full min-h-0">
-      <SessionSidebar
-        className="hidden md:flex"
-        sessions={sessions}
-        activeId={selectedSessionId}
-        onNewChat={startNewChat}
-        onSelect={selectSession}
-        onDelete={(sessionId) => {
-          captureProductEvent("chat_delete_requested", {
-            was_active: selectedSessionId === sessionId,
-          });
-          setPendingDeleteId(sessionId);
-        }}
-      />
-      <div className="relative min-w-0 flex-1">
-        <Button
-          variant="outline"
-          size="icon"
-          className="absolute left-3 top-3 z-20 bg-card/90 shadow-sm backdrop-blur md:hidden"
-          onClick={() => setMobileHistoryOpen(true)}
-          aria-label={pick({ tr: "Sohbet geçmişini aç", en: "Open chat history" })}
-        >
-          <MenuIcon />
-        </Button>
-        <AssistantThread
-          key={chatKey}
-          threadId={threadId}
-          initialMessages={seedMessages}
-          onThreadReady={(nextId) => {
-            setThreadId(nextId);
-            if (!selectedSessionId && nextId) setSelectedSessionId(nextId);
-            void refetch();
-          }}
-        />
-      </div>
+    <div className="flex h-full min-h-0 bg-[radial-gradient(circle_at_70%_0%,rgb(215_25_63/3.5%),transparent_32%)] dark:bg-[radial-gradient(circle_at_70%_0%,rgb(238_49_84/7%),transparent_34%)]">
+      {desktop ? (
+        <ResizablePanelGroup orientation="horizontal" className="min-h-0">
+          <ResizablePanel
+            id="chat-sidebar"
+            panelRef={sidebarPanelRef}
+            defaultSize="280px"
+            minSize="220px"
+            maxSize="380px"
+            collapsedSize="56px"
+            collapsible
+            groupResizeBehavior="preserve-pixel-size"
+            onResize={(size) => setSidebarCollapsed(size.inPixels < 100)}
+          >
+            <SessionSidebar
+              className="w-full"
+              collapsed={sidebarCollapsed}
+              onToggleCollapse={() => {
+                if (sidebarCollapsed) sidebarPanelRef.current?.expand();
+                else sidebarPanelRef.current?.collapse();
+              }}
+              sessions={sessions}
+              activeId={selectedSessionId}
+              onNewChat={startNewChat}
+              onSelect={selectSession}
+              onDelete={requestDelete}
+            />
+          </ResizablePanel>
+          <ResizableHandle
+            withHandle={!sidebarCollapsed}
+            aria-label={pick({ tr: "Sohbet kenar çubuğunu yeniden boyutlandır", en: "Resize chat sidebar" })}
+            className="bg-sidebar-border hover:bg-primary/30 focus-visible:bg-primary/30"
+          />
+          <ResizablePanel id="chat-content" minSize="320px">
+            <div className="relative h-full min-w-0">{assistantThread}</div>
+          </ResizablePanel>
+        </ResizablePanelGroup>
+      ) : (
+        <div className="relative min-w-0 flex-1">
+          <Button
+            variant="outline"
+            size="icon"
+            className="absolute left-3 top-3 z-20 bg-card/90 shadow-sm backdrop-blur"
+            onClick={() => setMobileHistoryOpen(true)}
+            aria-label={pick({ tr: "Sohbet geçmişini aç", en: "Open chat history" })}
+          >
+            <MenuIcon />
+          </Button>
+          {assistantThread}
+        </div>
+      )}
       <Sheet open={mobileHistoryOpen} onOpenChange={setMobileHistoryOpen}>
         <SheetContent side="left" className="w-[19rem] max-w-[88vw] gap-0 bg-sidebar p-0">
           <SheetHeader className="border-b">
@@ -340,8 +401,7 @@ export function ChatShell() {
             onNewChat={() => { startNewChat(); setMobileHistoryOpen(false); }}
             onSelect={(sessionId) => { void selectSession(sessionId); setMobileHistoryOpen(false); }}
             onDelete={(sessionId) => {
-              captureProductEvent("chat_delete_requested", { was_active: selectedSessionId === sessionId });
-              setPendingDeleteId(sessionId);
+              requestDelete(sessionId);
               setMobileHistoryOpen(false);
             }}
           />

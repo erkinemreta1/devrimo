@@ -1,12 +1,16 @@
 "use client";
 
-import { MessageSquarePlusIcon, Trash2Icon } from "lucide-react";
+import {
+  MessageSquarePlusIcon,
+  PanelLeftCloseIcon,
+  PanelLeftOpenIcon,
+  Trash2Icon,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import type { ChatSession } from "@/lib/types";
 import { useLocale } from "@/components/locale-provider";
-import { McpToolsList } from "@/components/chat/mcp-tools-list";
 
 export function SessionSidebar({
   sessions,
@@ -15,6 +19,8 @@ export function SessionSidebar({
   onSelect,
   onDelete,
   className,
+  collapsed = false,
+  onToggleCollapse,
 }: {
   sessions: ChatSession[];
   activeId?: string;
@@ -22,17 +28,32 @@ export function SessionSidebar({
   onSelect: (sessionId: string) => void;
   onDelete: (sessionId: string) => void;
   className?: string;
+  collapsed?: boolean;
+  onToggleCollapse?: () => void;
 }) {
   const { pick } = useLocale();
   return (
-    <aside aria-label={pick({ tr: "Sohbet geçmişi", en: "Chat history" })} className={cn("motion-sidebar flex h-full w-64 shrink-0 flex-col border-r bg-sidebar/88", className)}>
-      <div className="p-3">
-        <Button className="w-full justify-start" variant="outline" onClick={onNewChat}>
+    <aside aria-label={pick({ tr: "Sohbet geçmişi", en: "Chat history" })} className={cn("motion-sidebar flex h-full min-w-0 flex-col bg-sidebar/88", className)}>
+      <div className={cn("border-b p-3", collapsed && "flex flex-col items-center gap-2 px-2")}>
+        {onToggleCollapse ? (
+          <div className={cn("mb-2 flex items-center justify-between", collapsed && "mb-0")}>
+            {!collapsed ? (
+              <div>
+                <p className="text-sm font-semibold">{pick({ tr: "Sohbetler", en: "Chats" })}</p>
+                <p className="text-[11px] text-muted-foreground">{sessions.length} {pick({ tr: "sohbet", en: sessions.length === 1 ? "conversation" : "conversations" })}</p>
+              </div>
+            ) : null}
+            <Button variant="ghost" size="icon-sm" onClick={onToggleCollapse} aria-label={collapsed ? pick({ tr: "Sohbet kenar çubuğunu aç", en: "Expand chat sidebar" }) : pick({ tr: "Sohbet kenar çubuğunu daralt", en: "Collapse chat sidebar" })}>
+              {collapsed ? <PanelLeftOpenIcon /> : <PanelLeftCloseIcon />}
+            </Button>
+          </div>
+        ) : null}
+        <Button className={cn("w-full justify-start", collapsed && "size-9 justify-center px-0")} variant="outline" onClick={onNewChat} aria-label={collapsed ? pick({ tr: "Yeni sohbet", en: "New chat" }) : undefined}>
           <MessageSquarePlusIcon />
-          {pick({ tr: "Yeni sohbet", en: "New chat" })}
+          {!collapsed ? pick({ tr: "Yeni sohbet", en: "New chat" }) : null}
         </Button>
       </div>
-      <ScrollArea className="min-h-0 flex-1">
+      {!collapsed ? <ScrollArea className="min-h-0 flex-1">
         <nav aria-label={pick({ tr: "Sohbetler", en: "Chats" })} className="flex flex-col gap-1 px-2 pb-3">
           {sessions.length === 0 ? (
             <p className="px-2 py-6 text-sm text-muted-foreground">{pick({ tr: "İlk sohbetini başlat.", en: "Start your first conversation." })}</p>
@@ -66,10 +87,12 @@ export function SessionSidebar({
             ))
           )}
         </nav>
-      </ScrollArea>
-      <div className="border-t pt-3">
-        <McpToolsList compact />
-      </div>
+      </ScrollArea> : <div className="flex-1" />}
+      {!collapsed ? (
+        <p className="border-t px-4 py-3 text-[11px] leading-4 text-muted-foreground">
+          {pick({ tr: "Sohbet geçmişin yalnızca hesabına bağlıdır.", en: "Your chat history belongs only to your account." })}
+        </p>
+      ) : null}
     </aside>
   );
 }

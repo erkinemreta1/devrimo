@@ -50,7 +50,7 @@ type ProductEventProperties = {
   campus_disconnected: { result: "success" | "error" };
 
   // --- onboarding + preferences ------------------------------------------
-  onboarding_step_viewed: { step: "welcome" | "connect" | "tools" | "ready" };
+  onboarding_step_viewed: { step: "welcome" | "connect" | "privacy" | "ready" };
   onboarding_connection_result: { result: "success" | "error"; verification_skipped: boolean };
   onboarding_tool_selection_saved: { tool_count: number; result: "success" | "error" };
   onboarding_finished: { path: "completed" | "skipped" };
