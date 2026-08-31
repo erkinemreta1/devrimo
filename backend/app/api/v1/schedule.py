@@ -32,10 +32,22 @@ def _json_value(value: Any) -> Any:
         value = value.model_dump(mode="json")
     if isinstance(value, str):
         try:
-            return json.loads(value)
+            return _json_value(json.loads(value))
         except json.JSONDecodeError:
             return value
-    if isinstance(value, (dict, list, int, float, bool)) or value is None:
+    if isinstance(value, list):
+        return [_json_value(item) for item in value]
+    if isinstance(value, dict):
+        # Agno wraps MCP results in a content block whose text contains the
+        # tool's actual JSON payload.  Unwrap a single textual result so every
+        # schedule endpoint exposes the same plain data shape.
+        content = value.get("content")
+        if isinstance(content, list):
+            texts = [item.get("text") for item in content if isinstance(item, dict) and isinstance(item.get("text"), str)]
+            if len(texts) == 1:
+                return _json_value(texts[0])
+        return {key: _json_value(item) for key, item in value.items()}
+    if isinstance(value, (int, float, bool)) or value is None:
         return value
     return str(value)
 
