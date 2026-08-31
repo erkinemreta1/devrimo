@@ -42,6 +42,8 @@ def _json_value(value: Any) -> Any:
         # tool's actual JSON payload.  Unwrap a single textual result so every
         # schedule endpoint exposes the same plain data shape.
         content = value.get("content")
+        if isinstance(content, (str, dict)):
+            return _json_value(content)
         if isinstance(content, list):
             texts = [item.get("text") for item in content if isinstance(item, dict) and isinstance(item.get("text"), str)]
             if len(texts) == 1:
