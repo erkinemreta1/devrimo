@@ -1,11 +1,14 @@
 "use client";
 
 import {
+  MessageSquareIcon,
   MessageSquarePlusIcon,
   PanelLeftCloseIcon,
   PanelLeftOpenIcon,
   Trash2Icon,
 } from "lucide-react";
+import { useId } from "react";
+import { motion, useReducedMotion } from "motion/react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
@@ -32,6 +35,8 @@ export function SessionSidebar({
   onToggleCollapse?: () => void;
 }) {
   const { pick } = useLocale();
+  const instanceId = useId();
+  const reduceMotion = useReducedMotion();
   return (
     <aside aria-label={pick({ tr: "Sohbet geçmişi", en: "Chat history" })} className={cn("motion-sidebar flex h-full min-w-0 flex-col bg-sidebar/88", className)}>
       <div className={cn("border-b p-3", collapsed && "flex flex-col items-center gap-2 px-2")}>
@@ -54,37 +59,50 @@ export function SessionSidebar({
         </Button>
       </div>
       {!collapsed ? <ScrollArea className="min-h-0 flex-1">
-        <nav aria-label={pick({ tr: "Sohbetler", en: "Chats" })} className="flex flex-col gap-1 px-2 pb-3">
+        <nav aria-label={pick({ tr: "Sohbetler", en: "Chats" })} className="flex flex-col gap-1.5 px-2 pb-3 pt-1">
           {sessions.length === 0 ? (
             <p className="px-2 py-6 text-sm text-muted-foreground">{pick({ tr: "İlk sohbetini başlat.", en: "Start your first conversation." })}</p>
           ) : (
-            sessions.map((session) => (
-              <div
-                key={session.id}
-                className={cn(
-                  "group flex min-h-11 items-center rounded-lg transition-colors duration-200",
-                  activeId === session.id && "bg-sidebar-accent shadow-[inset_3px_0_0_var(--primary)]",
-                )}
-              >
-                <button
-                  type="button"
-                  className="min-w-0 flex-1 truncate px-3 py-2 text-left text-sm"
-                  onClick={() => onSelect(session.id)}
-                  aria-current={activeId === session.id ? "page" : undefined}
+            sessions.map((session) => {
+              const active = activeId === session.id;
+              return (
+                <div
+                  key={session.id}
+                  className={cn(
+                    "group relative isolate flex min-h-12 items-center overflow-hidden rounded-xl transition-colors duration-300",
+                    active ? "text-sidebar-foreground" : "text-muted-foreground hover:bg-card/45 hover:text-sidebar-foreground",
+                  )}
                 >
-                  {session.title?.trim() || pick({ tr: "İsimsiz sohbet", en: "Untitled chat" })}
-                </button>
-                <Button
-                  variant="ghost"
-                  size="icon-xs"
-                  className="mr-1 opacity-100 transition-opacity lg:opacity-0 lg:group-hover:opacity-100 lg:focus-visible:opacity-100"
-                  onClick={() => onDelete(session.id)}
-                  aria-label={pick({ tr: "Sohbeti sil", en: "Delete chat" })}
-                >
-                  <Trash2Icon />
-                </Button>
-              </div>
-            ))
+                  {active ? (
+                    <motion.div
+                      layoutId={`active-chat-surface-${instanceId}`}
+                      className="absolute inset-0 -z-10 rounded-xl border border-white/70 bg-card/80 shadow-[0_1px_0_rgb(255_255_255/85%)_inset,0_8px_24px_rgb(65_45_36/9%)] backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.065] dark:shadow-[0_1px_0_rgb(255_255_255/8%)_inset,0_10px_28px_rgb(0_0_0/24%)]"
+                      transition={reduceMotion ? { duration: 0 } : { type: "spring", stiffness: 430, damping: 36, mass: 0.75 }}
+                    />
+                  ) : null}
+                  <button
+                    type="button"
+                    className="relative z-10 flex min-w-0 flex-1 items-center gap-2.5 px-2.5 py-2 text-left text-sm outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                    onClick={() => onSelect(session.id)}
+                    aria-current={active ? "page" : undefined}
+                  >
+                    <span className={cn("grid size-7 shrink-0 place-items-center rounded-lg transition-colors duration-300", active ? "bg-primary/10 text-primary" : "bg-sidebar-accent/55 text-muted-foreground group-hover:text-foreground")}>
+                      <MessageSquareIcon className="size-3.5" />
+                    </span>
+                    <span className={cn("min-w-0 flex-1 truncate", active && "font-medium tracking-[-0.01em]")}>{session.title?.trim() || pick({ tr: "İsimsiz sohbet", en: "Untitled chat" })}</span>
+                  </button>
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    className="relative z-10 mr-1.5 shrink-0 text-muted-foreground opacity-100 transition-[opacity,background-color,color] lg:opacity-0 lg:group-hover:opacity-100 lg:focus-visible:opacity-100"
+                    onClick={() => onDelete(session.id)}
+                    aria-label={pick({ tr: "Sohbeti sil", en: "Delete chat" })}
+                  >
+                    <Trash2Icon />
+                  </Button>
+                </div>
+              );
+            })
           )}
         </nav>
       </ScrollArea> : <div className="flex-1" />}

@@ -228,6 +228,83 @@
       0 1px 0 rgb(255 255 255 / 5%) inset,
       0 22px 56px rgb(0 0 0 / 24%);
   }
+  .glass-control {
+    position: relative;
+    isolation: isolate;
+    overflow: hidden;
+    border: 1px solid rgb(255 255 255 / 72%);
+    background:
+      linear-gradient(145deg, rgb(255 255 255 / 68%), rgb(255 255 255 / 34%)),
+      rgb(246 243 237 / 58%);
+    box-shadow:
+      0 1px 0 rgb(255 255 255 / 92%) inset,
+      0 1px 2px rgb(63 45 37 / 8%),
+      0 10px 28px rgb(63 45 37 / 8%);
+    backdrop-filter: blur(20px) saturate(150%);
+    -webkit-backdrop-filter: blur(20px) saturate(150%);
+    transition:
+      transform 300ms cubic-bezier(0.22, 1, 0.36, 1),
+      border-color 300ms ease,
+      box-shadow 300ms ease;
+  }
+  .glass-control::before {
+    content: "";
+    position: absolute;
+    z-index: -1;
+    inset: -90% -35%;
+    pointer-events: none;
+    background: linear-gradient(105deg, transparent 38%, rgb(255 255 255 / 72%) 50%, transparent 62%);
+    transform: translateX(-42%) rotate(8deg);
+    transition: transform 720ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .glass-control:hover {
+    transform: translateY(-1px);
+    border-color: rgb(255 255 255 / 92%);
+    box-shadow:
+      0 1px 0 rgb(255 255 255 / 98%) inset,
+      0 2px 4px rgb(63 45 37 / 9%),
+      0 14px 34px rgb(63 45 37 / 11%);
+  }
+  .glass-control:hover::before {
+    transform: translateX(36%) rotate(8deg);
+  }
+  .glass-control:active {
+    transform: translateY(0) scale(0.985);
+  }
+  .glass-selection {
+    border: 1px solid rgb(255 255 255 / 78%);
+    background: linear-gradient(145deg, rgb(255 255 255 / 94%), rgb(255 255 255 / 68%));
+    box-shadow:
+      0 1px 0 rgb(255 255 255 / 95%) inset,
+      0 3px 10px rgb(65 46 38 / 14%);
+  }
+  .dark .glass-control {
+    border-color: rgb(255 255 255 / 11%);
+    background:
+      linear-gradient(145deg, rgb(255 255 255 / 9%), rgb(255 255 255 / 3%)),
+      rgb(27 25 24 / 62%);
+    box-shadow:
+      0 1px 0 rgb(255 255 255 / 10%) inset,
+      0 1px 2px rgb(0 0 0 / 24%),
+      0 12px 30px rgb(0 0 0 / 24%);
+  }
+  .dark .glass-control::before {
+    background: linear-gradient(105deg, transparent 38%, rgb(255 255 255 / 13%) 50%, transparent 62%);
+  }
+  .dark .glass-control:hover {
+    border-color: rgb(255 255 255 / 18%);
+    box-shadow:
+      0 1px 0 rgb(255 255 255 / 13%) inset,
+      0 2px 4px rgb(0 0 0 / 30%),
+      0 16px 38px rgb(0 0 0 / 30%);
+  }
+  .dark .glass-selection {
+    border-color: rgb(255 255 255 / 15%);
+    background: linear-gradient(145deg, rgb(255 255 255 / 16%), rgb(255 255 255 / 8%));
+    box-shadow:
+      0 1px 0 rgb(255 255 255 / 13%) inset,
+      0 4px 14px rgb(0 0 0 / 28%);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

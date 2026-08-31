@@ -2,7 +2,8 @@
 
 import { MoonIcon, SunIcon } from "lucide-react";
 import { useTheme } from "next-themes";
-import { useSyncExternalStore } from "react";
+import { useId, useSyncExternalStore } from "react";
+import { motion, useReducedMotion } from "motion/react";
 import { useLocale } from "@/components/locale-provider";
 import { cn } from "@/lib/utils";
 import { captureProductEvent } from "@/components/posthog-analytics";
@@ -10,6 +11,8 @@ import { captureProductEvent } from "@/components/posthog-analytics";
 export function ThemeSwitcher({ className }: { className?: string }) {
   const { theme, setTheme } = useTheme();
   const { pick } = useLocale();
+  const instanceId = useId();
+  const reduceMotion = useReducedMotion();
   const mounted = useSyncExternalStore(
     () => () => undefined,
     () => true,
@@ -19,7 +22,7 @@ export function ThemeSwitcher({ className }: { className?: string }) {
 
   return (
     <div
-      className={cn("inline-flex h-11 items-center rounded-xl border border-border bg-background/85 p-1 shadow-sm", className)}
+      className={cn("glass-control inline-flex h-11 items-center rounded-full p-1", className)}
       role="group"
       aria-label={pick({ tr: "Renk teması", en: "Color theme" })}
     >
@@ -39,19 +42,25 @@ export function ThemeSwitcher({ className }: { className?: string }) {
               captureProductEvent("theme_changed", { theme: value });
             }}
             className={cn(
-              "group grid size-9 place-items-center rounded-lg text-muted-foreground transition-[color,background-color,transform,box-shadow] duration-200 outline-none",
-              "hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
-              "hover:-translate-y-px active:scale-90",
-              active && "bg-foreground text-background shadow-sm hover:bg-foreground hover:text-background hover:translate-y-0",
+              "group relative isolate grid size-9 place-items-center overflow-hidden rounded-full text-muted-foreground outline-none transition-[color,transform] duration-300",
+              "hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-transparent active:scale-95",
+              active && "text-foreground",
             )}
           >
+            {active ? (
+              <motion.span
+                layoutId={`theme-glass-selection-${instanceId}`}
+                className="glass-selection absolute inset-0 -z-10 rounded-full"
+                transition={reduceMotion ? { duration: 0 } : { type: "spring", stiffness: 460, damping: 36, mass: 0.7 }}
+              />
+            ) : null}
             <Icon
               className={cn(
-                "size-3.5 transition-[transform,opacity] duration-300",
+                "relative z-10 size-3.5 transition-[transform,opacity] duration-500",
                 active
                   ? value === "light"
-                    ? "motion-pop rotate-90 scale-110 opacity-100"
-                    : "motion-pop -rotate-12 scale-110 opacity-100"
+                    ? "rotate-90 scale-110 opacity-100"
+                    : "-rotate-12 scale-110 opacity-100"
                   : "scale-90 opacity-70",
               )}
               aria-hidden="true"
