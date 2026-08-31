@@ -32,6 +32,10 @@ tar -czf "$BACKUP_DIR/source-$stamp.tar.gz" \
   --exclude='./node' \
   --exclude='./.npm' \
   --exclude='./.local' \
+  --exclude='./.ssh' \
+  --exclude='./.backups' \
+  --exclude='./.deploy.lock' \
+  --exclude='./.deployed-sha' \
   -C "$DEPLOY_DIR" .
 chmod 600 "$BACKUP_DIR/source-$stamp.tar.gz"
 
