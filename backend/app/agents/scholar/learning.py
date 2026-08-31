@@ -14,11 +14,11 @@ MEMORY_POLICY = (
 )
 
 
-def build_learning(model: Model) -> LearningMachine | None:
+def build_learning(model: Model, *, enabled: bool | None = None) -> LearningMachine | None:
     settings = get_settings()
     # The echo model intentionally has no structured learning behavior; the
     # deterministic harness tests configuration without making background calls.
-    if not settings.agent_learning_enabled or settings.agent_runtime == "fake":
+    if not (settings.agent_learning_enabled if enabled is None else enabled) or settings.agent_runtime == "fake":
         return None
     db = get_agno_db()
     return LearningMachine(

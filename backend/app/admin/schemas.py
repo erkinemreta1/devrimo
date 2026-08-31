@@ -1,0 +1,49 @@
+from typing import Literal
+from uuid import UUID
+
+from pydantic import BaseModel, Field, field_validator
+
+from app.db.models import AdminRole
+
+
+class ReasonIn(BaseModel):
+    reason: str = Field(min_length=3, max_length=1000)
+
+
+class DeleteUserIn(ReasonIn):
+    confirm_email: str = Field(min_length=3, max_length=320)
+
+
+class InviteIn(BaseModel):
+    email: str = Field(min_length=3, max_length=320)
+
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, value: str) -> str:
+        value = value.strip().lower()
+        if "@" not in value:
+            raise ValueError("A valid email is required")
+        return value
+
+
+class AgentActionIn(BaseModel):
+    action: Literal["start", "stop", "restart", "destroy"]
+    reason: str = Field(min_length=3, max_length=1000)
+
+
+class MembershipIn(BaseModel):
+    user_id: UUID
+    role: AdminRole
+    organization_id: UUID | None = None
+    reason: str = Field(min_length=3, max_length=1000)
+
+
+class RuntimeSettingsIn(BaseModel):
+    model_id: str = Field(min_length=2, max_length=255)
+    profile: Literal["scholar", "legacy"]
+    max_tokens: int = Field(ge=256, le=131072)
+    legacy_history_runs: int = Field(ge=0, le=50)
+    scholar_history_runs: int = Field(ge=0, le=50)
+    tool_call_limit: int = Field(ge=1, le=50)
+    learning_enabled: bool
+    reason: str = Field(min_length=3, max_length=1000)

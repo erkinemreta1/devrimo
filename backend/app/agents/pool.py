@@ -29,6 +29,7 @@ from agno.agent import Agent
 from agno.tools.mcp import MCPTools
 
 from app.agents.builders import build_agent
+from app.agents.runtime import AgentRuntimeConfig, default_runtime_config
 from app.agents.toolset import build_toolkits, close_toolkits, connect_toolkits
 from app.campus.mcp_config import CampusServerSpec
 from app.config import get_settings
@@ -49,6 +50,7 @@ class ResidentAgent:
     # while the agent was resident.
     tool_ids: tuple[str, ...] = ()
     credential_revision: int = 0
+    runtime_revision: int = 0
     active_leases: int = 0
     retired: bool = False
     closed: bool = False
@@ -90,14 +92,25 @@ class AgentPool:
             return self._locks.setdefault(user_id, asyncio.Lock())
 
     async def acquire(
-        self, user_id: UUID, specs: list[CampusServerSpec], *, credential_revision: int = 0
+        self,
+        user_id: UUID,
+        specs: list[CampusServerSpec],
+        runtime: AgentRuntimeConfig | None = None,
+        *,
+        credential_revision: int = 0,
     ) -> ResidentAgent:
         """The user's live agent, building it if it isn't resident or is stale."""
         wanted = tuple(spec.tool_id for spec in specs)
+        runtime = runtime or default_runtime_config()
         lock = await self._lock_for(user_id)
         async with lock:
             entry = self._entries.get(user_id)
-            if entry is not None and entry.tool_ids == wanted and entry.credential_revision == credential_revision:
+            if (
+                entry is not None
+                and entry.tool_ids == wanted
+                and entry.credential_revision == credential_revision
+                and entry.runtime_revision == runtime.revision
+            ):
                 entry.touch()
                 self._entries.move_to_end(user_id)
                 return entry
@@ -108,7 +121,7 @@ class AgentPool:
                 logger.info("agent_toolset_changed", user_id=str(user_id), was=entry.tool_ids, now=wanted)
                 await self._discard(user_id)
 
-            entry = await self._build(user_id, specs, wanted, credential_revision)
+            entry = await self._build(user_id, specs, wanted, credential_revision, runtime)
             self._entries[user_id] = entry
             self._entries.move_to_end(user_id)
 
@@ -116,11 +129,17 @@ class AgentPool:
         return entry
 
     async def lease(
-        self, user_id: UUID, specs: list[CampusServerSpec], *, credential_revision: int = 0
+        self,
+        user_id: UUID,
+        specs: list[CampusServerSpec],
+        runtime: AgentRuntimeConfig | None = None,
+        *,
+        credential_revision: int = 0,
     ) -> ResidentLease:
         """Acquire a runtime lease that eviction and reconfiguration must respect."""
+        runtime = runtime or default_runtime_config()
         while True:
-            entry = await self.acquire(user_id, specs, credential_revision=credential_revision)
+            entry = await self.acquire(user_id, specs, runtime, credential_revision=credential_revision)
             lock = await self._lock_for(user_id)
             async with lock:
                 # The entry may have been retired by a concurrent capacity or
@@ -145,12 +164,13 @@ class AgentPool:
         specs: list[CampusServerSpec],
         wanted: tuple[str, ...],
         credential_revision: int,
+        runtime: AgentRuntimeConfig,
     ) -> ResidentAgent:
         settings = get_settings()
         toolkits = build_toolkits(specs, timeout_seconds=settings.campus_mcp_timeout_seconds)
         connected = await connect_toolkits(toolkits)
 
-        agent = build_agent(user_id, connected)
+        agent = build_agent(user_id, connected, runtime)
         logger.info(
             "agent_built",
             user_id=str(user_id),
@@ -163,6 +183,7 @@ class AgentPool:
             toolkits=connected,
             tool_ids=wanted,
             credential_revision=credential_revision,
+            runtime_revision=runtime.revision,
         )
 
     async def _discard(self, user_id: UUID) -> None:

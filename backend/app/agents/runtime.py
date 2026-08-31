@@ -1,0 +1,58 @@
+from dataclasses import asdict, dataclass
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.config import get_settings
+from app.db.models import AgentRuntimeSettings
+
+
+@dataclass(frozen=True)
+class AgentRuntimeConfig:
+    model_id: str
+    profile: str
+    max_tokens: int
+    legacy_history_runs: int
+    scholar_history_runs: int
+    tool_call_limit: int
+    learning_enabled: bool
+    revision: int
+
+    def as_dict(self) -> dict:
+        return asdict(self)
+
+
+def default_runtime_config() -> AgentRuntimeConfig:
+    settings = get_settings()
+    return AgentRuntimeConfig(
+        model_id=settings.agent_model,
+        profile=settings.agent_profile,
+        max_tokens=settings.agent_max_tokens,
+        legacy_history_runs=settings.agent_history_runs,
+        scholar_history_runs=settings.scholar_history_runs,
+        tool_call_limit=settings.agent_tool_call_limit,
+        learning_enabled=settings.agent_learning_enabled,
+        revision=0,
+    )
+
+
+async def get_runtime_config(db: AsyncSession) -> AgentRuntimeConfig:
+    settings = get_settings()
+    row = await db.get(AgentRuntimeSettings, "default")
+    return AgentRuntimeConfig(
+        model_id=row.model_id if row and row.model_id else settings.agent_model,
+        profile=row.profile if row and row.profile else settings.agent_profile,
+        max_tokens=row.max_tokens if row and row.max_tokens is not None else settings.agent_max_tokens,
+        legacy_history_runs=(
+            row.legacy_history_runs if row and row.legacy_history_runs is not None else settings.agent_history_runs
+        ),
+        scholar_history_runs=(
+            row.scholar_history_runs if row and row.scholar_history_runs is not None else settings.scholar_history_runs
+        ),
+        tool_call_limit=(
+            row.tool_call_limit if row and row.tool_call_limit is not None else settings.agent_tool_call_limit
+        ),
+        learning_enabled=(
+            row.learning_enabled if row and row.learning_enabled is not None else settings.agent_learning_enabled
+        ),
+        revision=row.revision if row else 0,
+    )

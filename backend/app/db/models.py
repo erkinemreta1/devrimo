@@ -2,7 +2,20 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, Enum, ForeignKey, Index, Integer, LargeBinary, String, Text, func
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Index,
+    Integer,
+    LargeBinary,
+    String,
+    Text,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -14,6 +27,115 @@ class AgentStatus(enum.StrEnum):
     stopped = "stopped"
     error = "error"
     destroying = "destroying"
+
+
+class AccountStatus(enum.StrEnum):
+    active = "active"
+    suspended = "suspended"
+    deletion_pending = "deletion_pending"
+    deleted = "deleted"
+
+
+class AdminRole(enum.StrEnum):
+    super_admin = "super_admin"
+    operator = "operator"
+    campus_admin = "campus_admin"
+
+
+class Organization(Base):
+    __tablename__ = "organizations"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    slug: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class AccountDirectory(Base):
+    __tablename__ = "account_directory"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('active', 'suspended', 'deletion_pending', 'deleted')",
+            name="ck_account_directory_status",
+        ),
+        Index("ix_account_directory_org_status_created", "organization_id", "status", "created_at", "user_id"),
+        Index("ix_account_directory_org_last_seen", "organization_id", "last_seen_at", "user_id"),
+    )
+
+    user_id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
+    organization_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organizations.id"), nullable=False)
+    email: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    email_normalized: Mapped[str | None] = mapped_column(String(320), nullable=True, index=True)
+    status: Mapped[AccountStatus] = mapped_column(
+        Enum(AccountStatus, native_enum=False, length=32), default=AccountStatus.active, nullable=False
+    )
+    auth_created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    suspended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    suspended_reason: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class AdminMembership(Base):
+    __tablename__ = "admin_memberships"
+    __table_args__ = (
+        CheckConstraint(
+            "role IN ('super_admin', 'operator', 'campus_admin')",
+            name="ck_admin_memberships_role",
+        ),
+        Index("ix_admin_memberships_org_role", "organization_id", "role", "user_id"),
+    )
+
+    user_id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
+    organization_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("organizations.id"), nullable=True)
+    role: Mapped[AdminRole] = mapped_column(Enum(AdminRole, native_enum=False, length=32), nullable=False)
+    granted_by: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class AdminAuditEvent(Base):
+    __tablename__ = "admin_audit_events"
+    __table_args__ = (
+        Index("ix_admin_audit_created_id", "created_at", "id"),
+        Index("ix_admin_audit_org_created", "organization_id", "created_at", "id"),
+        Index("ix_admin_audit_target_created", "target_user_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    actor_user_id: Mapped[uuid.UUID] = mapped_column(nullable=False)
+    target_user_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
+    organization_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("organizations.id"), nullable=True)
+    action: Mapped[str] = mapped_column(String(100), nullable=False)
+    result: Mapped[str] = mapped_column(String(32), nullable=False)
+    reason: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    before_state: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    after_state: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class AgentRuntimeSettings(Base):
+    __tablename__ = "agent_runtime_settings"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default="default")
+    model_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    profile: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    max_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    legacy_history_runs: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    scholar_history_runs: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    tool_call_limit: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    learning_enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    revision: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
 
 
 class Agent(Base):

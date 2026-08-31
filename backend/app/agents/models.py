@@ -10,6 +10,7 @@ from the chat route.
 
 from agno.models.base import Model
 
+from app.agents.runtime import AgentRuntimeConfig, default_runtime_config
 from app.config import get_settings
 from app.logging import get_logger
 from app.observability.flags import FLAG_AGENT_MODEL, flag_variant
@@ -38,8 +39,9 @@ def _traced(model: Model) -> Model:
     return model
 
 
-def build_model() -> Model:
+def build_model(runtime: AgentRuntimeConfig | None = None) -> Model:
     settings = get_settings()
+    runtime = runtime or default_runtime_config()
     if settings.agent_runtime == "fake":
         from app.agents.echo_model import EchoModel
 
@@ -47,7 +49,7 @@ def build_model() -> Model:
 
     # A flagged model override makes a model A/B measurable directly from the
     # $ai_generation events, and makes rolling back a bad model immediate.
-    model_id = flag_variant(FLAG_AGENT_MODEL, default=settings.agent_model)
+    model_id = flag_variant(FLAG_AGENT_MODEL, default=runtime.model_id)
 
     base_url = (settings.agent_openai_base_url or "").lower()
     if "opencode.ai" in base_url or model_id == "muse-spark-1.2-contributor":
@@ -58,7 +60,7 @@ def build_model() -> Model:
                 id=model_id,
                 api_key=settings.agent_openai_api_key,
                 base_url=settings.agent_openai_base_url,
-                max_output_tokens=settings.agent_max_tokens,
+                max_output_tokens=runtime.max_tokens,
             )
         )
 
@@ -70,7 +72,7 @@ def build_model() -> Model:
                 id=model_id,
                 api_key=settings.agent_openai_api_key,
                 base_url=settings.agent_openai_base_url,
-                max_tokens=settings.agent_max_tokens,
+                max_tokens=runtime.max_tokens,
             )
         )
 
@@ -81,6 +83,6 @@ def build_model() -> Model:
             id=model_id,
             api_key=settings.agent_openai_api_key,
             base_url=settings.agent_openai_base_url,
-            max_tokens=settings.agent_max_tokens,
+            max_tokens=runtime.max_tokens,
         )
     )

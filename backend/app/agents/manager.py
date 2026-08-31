@@ -25,6 +25,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.pool import ResidentAgent, ResidentLease, get_pool
+from app.agents.runtime import get_runtime_config
 from app.campus import service as campus_service
 from app.config import get_settings
 from app.db.models import Agent, AgentStatus
@@ -78,10 +79,12 @@ async def resident_for(db: AsyncSession, agent: Agent) -> ResidentAgent:
     """
     specs = await campus_service.campus_server_specs(db, agent.user_id)
     credential_revision = await campus_service.credential_revision(db, agent.user_id)
+    runtime = await get_runtime_config(db)
     try:
         resident = await get_pool().acquire(
             agent.user_id,
             specs,
+            runtime,
             credential_revision=credential_revision,
         )
     except Exception as exc:
@@ -108,10 +111,12 @@ async def lease_for(db: AsyncSession, agent: Agent) -> ResidentLease:
     """Bring up this user's runtime and hold it for the complete streamed turn."""
     specs = await campus_service.campus_server_specs(db, agent.user_id)
     credential_revision = await campus_service.credential_revision(db, agent.user_id)
+    runtime = await get_runtime_config(db)
     try:
         lease = await get_pool().lease(
             agent.user_id,
             specs,
+            runtime,
             credential_revision=credential_revision,
         )
     except Exception as exc:

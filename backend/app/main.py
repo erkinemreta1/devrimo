@@ -8,8 +8,10 @@ from fastapi.responses import JSONResponse
 from app.agents.pool import reset_pool
 from app.agents.reconciler import run_reconciler_loop
 from app.api.v1 import router as api_v1_router
+from app.api.v1.admin import sync_directory
 from app.campus.manifest import commits_by_slug
 from app.config import get_settings
+from app.db.session import SessionLocal
 from app.logging import configure_logging, get_logger
 from app.observability import ObservabilityMiddleware, capture_exception, get_posthog
 from app.observability.client import shutdown as posthog_shutdown
@@ -17,6 +19,23 @@ from app.observability.logs import shutdown as posthog_logs_shutdown
 
 configure_logging()
 logger = get_logger(__name__)
+
+
+async def _run_directory_sync_loop(stop_event: asyncio.Event) -> None:
+    settings = get_settings()
+    if not settings.supabase_secret_key or not settings.supabase_url:
+        return
+    while not stop_event.is_set():
+        try:
+            async with SessionLocal() as db:
+                synced = await sync_directory(db)
+            logger.info("admin_directory_synced", users=synced)
+        except Exception as exc:
+            logger.warning("admin_directory_sync_failed", error=str(exc))
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=settings.admin_directory_sync_seconds)
+        except TimeoutError:
+            pass
 
 
 @asynccontextmanager
@@ -35,12 +54,14 @@ async def lifespan(app: FastAPI):
     get_posthog()
     stop_event = asyncio.Event()
     reconciler_task = asyncio.create_task(run_reconciler_loop(stop_event))
+    directory_sync_task = asyncio.create_task(_run_directory_sync_loop(stop_event))
     logger.info("startup_complete")
     try:
         yield
     finally:
         stop_event.set()
         await reconciler_task
+        await directory_sync_task
         # Every resident agent is holding MCP subprocesses that have a
         # student's METU credentials in their environment; leaving them
         # parented to a dead broker is not acceptable.

@@ -14,6 +14,11 @@ class Settings(BaseSettings):
 
     supabase_url: str = ""
     supabase_jwt_secret: str = ""
+    # Supabase secret key (or legacy service-role key). Backend only.
+    supabase_secret_key: str = ""
+    admin_bootstrap_user_ids: str = ""
+    admin_directory_sync_seconds: int = 300
+    posthog_dashboard_url: str = ""
 
     # --- Agent runtime -----------------------------------------------------
     # "agno" runs a real Agno agent with real MCP subprocesses. "fake" swaps in
@@ -105,6 +110,10 @@ class Settings(BaseSettings):
     @property
     def agentos_cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.agentos_cors_origins.split(",") if origin.strip()]
+
+    @property
+    def admin_bootstrap_ids(self) -> set[str]:
+        return {value.strip() for value in self.admin_bootstrap_user_ids.split(",") if value.strip()}
 
 
 @lru_cache
