@@ -66,7 +66,7 @@ class ChatTelemetry {
   private requestStartedAt: number | null = null;
   private streamError: ChatStreamError | null = null;
 
-  readonly transport: AssistantChatTransport;
+  readonly transport: AssistantChatTransport<UIMessage>;
 
   constructor(onRequestStart: () => void) {
     this.transport = new AssistantChatTransport({
