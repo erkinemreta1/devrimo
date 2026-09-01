@@ -10,8 +10,10 @@ import json
 import re
 import time
 from typing import Any
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents import manager
@@ -25,6 +27,18 @@ logger = get_logger(__name__)
 _CACHE_TTL_SECONDS = 15 * 60
 _cache: dict[tuple[str, ...], tuple[float, Any]] = {}
 _locks: dict[str, asyncio.Lock] = {}
+
+
+class AiScheduleCourse(BaseModel):
+    code: str = Field(min_length=3, max_length=20)
+    name: str = Field(default="", max_length=255)
+
+
+class AiScheduleRequest(BaseModel):
+    department: str = Field(min_length=3, max_length=20)
+    semester: str = Field(min_length=4, max_length=20)
+    program_semester: int = Field(ge=1, le=8)
+    courses: list[AiScheduleCourse] = Field(default_factory=list, max_length=20)
 
 
 def _json_value(value: Any) -> Any:
@@ -315,3 +329,88 @@ async def course_sections(
         meeting_keys=sorted(first_meeting.keys()) if isinstance(first_meeting, dict) else [],
     )
     return {"data": data}
+
+
+def _json_from_agent(value: Any) -> dict[str, Any]:
+    content = getattr(value, "content", value)
+    if not isinstance(content, str):
+        content = json.dumps(_json_value(content), ensure_ascii=False)
+    text = content.strip()
+    fenced = re.search(r"```(?:json)?\s*([\s\S]*?)```", text, re.IGNORECASE)
+    if fenced:
+        text = fenced.group(1).strip()
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        start, end = text.find("{"), text.rfind("}")
+        if start < 0 or end <= start:
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Schedule assistant returned an invalid response")
+        try:
+            parsed = json.loads(text[start : end + 1])
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Schedule assistant returned invalid JSON") from exc
+    if not isinstance(parsed, dict):
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Schedule assistant response must be an object")
+    return parsed
+
+
+@router.post("/ai-plan")
+async def ai_schedule_plan(
+    body: AiScheduleRequest,
+    user: AuthenticatedUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Use one bounded agent run to fill gaps left by direct catalog calls."""
+    agent_record = await manager.get_agent_or_404(db, user.id)
+    lock_owner = f"schedule-{uuid4()}"
+    if not await manager.acquire_turn_lock(db, agent_record, lock_owner):
+        raise HTTPException(status.HTTP_409_CONFLICT, "Agent is busy with another message")
+    lease = None
+    try:
+        lease = await manager.lease_for(db, agent_record)
+        from app.agents.scholar.context import build_run_dependencies
+
+        dependencies = await build_run_dependencies(db, user.id, lease.resident)
+        # Only course identifiers enter the instruction. Display names can be
+        # user-authored, so keeping them out prevents prompt-shaped names from
+        # changing the planner contract.
+        requested = [item.code for item in body.courses]
+        prompt = f"""You are preparing machine-readable input for Devrimo's METU schedule planner.
+Use the connected Course Info and SAIS tools. Verify the target semester FIRST and never infer that a course is offered merely from a prior semester.
+Department: {body.department}
+Target semester: {body.semester}
+Student program semester: {body.program_semester}
+Requested course pool: {json.dumps(requested, ensure_ascii=False)}
+
+Return ONLY valid JSON with this exact shape:
+{{"courses":[{{"code":"full METU course code","name":"official name","credits":0,"sections":[{{"section":"1","instructor":"","meetings":[{{"day":"Mon|Tue|Wed|Thu|Fri","start":9,"duration":1,"room":""}}]}}]}}],"warnings":[]}}
+
+Rules:
+- For an empty requested pool, identify the student's required courses for program semester {body.program_semester}, then intersect them with courses actually offered in {body.semester}.
+- For a non-empty pool, return only those courses that are actually offered in {body.semester}.
+- Course codes must be full seven-digit METU codes when available.
+- Section and meeting data must come from tools. Never invent a day, time, room, section, credit, or offering status.
+- If a course is verified but its meeting times are unavailable, include the course with an empty sections array and add a short warning.
+- Do not include prose, Markdown, citations, or reasoning outside the JSON."""
+        result = await asyncio.wait_for(
+            lease.agent.arun(
+                input=prompt,
+                session_id=f"schedule-{uuid4()}",
+                user_id=str(user.id),
+                dependencies=dependencies,
+                stream=False,
+            ),
+            timeout=180,
+        )
+        payload = _json_from_agent(result)
+        return {
+            "courses": payload.get("courses", []),
+            "warnings": payload.get("warnings", []),
+            "source": "ai_verified",
+        }
+    except TimeoutError as exc:
+        raise HTTPException(status.HTTP_504_GATEWAY_TIMEOUT, "Schedule assistant timed out") from exc
+    finally:
+        if lease is not None:
+            await lease.release()
+        await manager.release_turn_lock(db, agent_record, lock_owner)

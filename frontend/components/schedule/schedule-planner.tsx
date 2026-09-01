@@ -20,6 +20,7 @@ type Entry = { id: string; code: string; name: string; section: string; day: Day
 type SavedPlan = { entries: Entry[]; term: string; department: string; semester: string; surname: string; emptyDay: string; avoidConflicts: boolean; avoidTravel: boolean };
 type CatalogCourse = { code: string; name: string; credits: number; rawCode: string };
 type CatalogSection = { section: string; instructor: string; meetings: { day: Day; start: number; duration: number; room: string }[] };
+type AiPlanCourse = { code?: string; name?: string; credits?: number; sections?: unknown };
 
 const DAYS: Day[] = ["Mon", "Tue", "Wed", "Thu", "Fri"];
 const HOURS = Array.from({ length: 10 }, (_, index) => index + 8);
@@ -70,7 +71,10 @@ function parseCourses(value: unknown): CatalogCourse[] {
 
 function courseIdentity(code: string) {
   const compact = code.toUpperCase().replace(/[^A-Z0-9]/g, "");
-  return compact.match(/\d{3,4}$/)?.[0] ?? compact;
+  // 5670201, EE201 and 201 all identify the same course inside the student's
+  // resolved department. Keeping only the final three digits lets chatbot
+  // answers map back to catalog rows regardless of display notation.
+  return compact.match(/\d{3}$/)?.[0] ?? compact;
 }
 
 function parseDepartmentCode(value: unknown) {
@@ -90,23 +94,6 @@ function parseDepartmentCode(value: unknown) {
   }
   const text = JSON.stringify(value);
   return text.match(/\b\d{3}\b/)?.[0] ?? "";
-}
-
-function parseCurriculumCourses(value: unknown, programSemester: string): CatalogCourse[] {
-  const payload = value as { category_courses?: { courses?: unknown }[] };
-  const grouped = Array.isArray(payload?.category_courses) ? payload.category_courses : [];
-  const semesterNumber = Number(programSemester);
-  const expectedYear = Math.ceil(semesterNumber / 2);
-  const expectedParity = semesterNumber % 2;
-  const seen = new Set<string>();
-  return parseCourses(grouped.map((group) => group.courses)).filter((course) => {
-    const number = courseIdentity(course.rawCode).match(/(\d{3})$/)?.[1];
-    if (!number || Number(number[0]) !== expectedYear || Number(number[2]) % 2 !== expectedParity) return false;
-    const identity = courseIdentity(course.rawCode);
-    if (seen.has(identity)) return false;
-    seen.add(identity);
-    return true;
-  });
 }
 
 function parseDay(value: string): Day | null {
@@ -180,6 +167,8 @@ export function SchedulePlanner() {
   const [catalogSearch, setCatalogSearch] = useState("");
   const [catalogBusy, setCatalogBusy] = useState(false);
   const [curriculumNotice, setCurriculumNotice] = useState("");
+  const [aiSections, setAiSections] = useState<Record<string, CatalogSection[]>>({});
+  const [poolDraft, setPoolDraft] = useState({ code: "", name: "" });
   const [draft, setDraft] = useState({ code: "", name: "", section: "1", day: "Mon" as Day, start: 9, duration: 1, room: "", credits: 3 });
 
   useEffect(() => {
@@ -209,6 +198,14 @@ export function SchedulePlanner() {
   const uniqueCourses = new Set(entries.filter((entry) => entry.kind === "course").map((entry) => entry.code)).size;
   const totalCredits = entries.filter((entry) => entry.kind === "course").reduce((sum, entry) => sum + entry.credits, 0);
   const totalHours = entries.reduce((sum, entry) => sum + entry.duration, 0);
+  const scheduledCourseGroups = useMemo(() => {
+    const groups = new Map<string, Entry[]>();
+    for (const entry of entries) {
+      const key = `${entry.code}::${entry.section}`;
+      groups.set(key, [...(groups.get(key) ?? []), entry]);
+    }
+    return [...groups.values()];
+  }, [entries]);
 
   const dayLabel = (day: Day) => ({ Mon: t("Pzt", "Mon"), Tue: t("Sal", "Tue"), Wed: t("Çar", "Wed"), Thu: t("Per", "Thu"), Fri: t("Cum", "Fri") })[day];
 
@@ -234,33 +231,57 @@ export function SchedulePlanner() {
     finally { setCatalogBusy(false); }
   }
 
+  async function requestAiPlan(courses: CatalogCourse[]) {
+    const response = await jsonFetch<{ courses?: AiPlanCourse[]; warnings?: string[]; source?: string }>("/api/schedule/ai-plan", {
+      method: "POST",
+      body: {
+        department: department.trim(),
+        semester: term,
+        program_semester: Number(semester),
+        courses: courses.map((course) => ({ code: course.rawCode, name: course.name })),
+      },
+    });
+    const sectionMap: Record<string, CatalogSection[]> = {};
+    const verified = (response.courses ?? []).flatMap((item) => {
+      const rawCode = String(item.code ?? "").trim();
+      if (!rawCode) return [];
+      sectionMap[courseIdentity(rawCode)] = parseSections(item.sections ?? []);
+      return [{ rawCode, code: rawCode.toUpperCase(), name: String(item.name ?? rawCode), credits: Number(item.credits ?? 0) }];
+    });
+    setAiSections((current) => ({ ...current, ...sectionMap }));
+    const warnings = (response.warnings ?? []).filter((warning): warning is string => typeof warning === "string");
+    return { courses: verified, warnings, sections: sectionMap };
+  }
+
+  function addPoolCourse() {
+    const rawCode = poolDraft.code.toUpperCase().replace(/[^A-Z0-9]/g, "");
+    if (!rawCode) return toast.error(t("Ders kodu gerekli.", "Course code is required."));
+    if (catalogCourses.some((course) => courseIdentity(course.rawCode) === courseIdentity(rawCode))) return toast.error(t("Bu ders zaten listede.", "This course is already in the list."));
+    setCatalogCourses((current) => [...current, { rawCode, code: rawCode, name: poolDraft.name.trim() || rawCode, credits: 0 }]);
+    setPoolDraft({ code: "", name: "" });
+  }
+
+  function removePoolCourse(course: CatalogCourse) {
+    const identity = courseIdentity(course.rawCode);
+    setCatalogCourses((current) => current.filter((item) => courseIdentity(item.rawCode) !== identity));
+    setAiSections((current) => { const next = { ...current }; delete next[identity]; return next; });
+    if (selectedCourse && courseIdentity(selectedCourse.rawCode) === identity) { setSelectedCourse(null); setCatalogSections([]); }
+  }
+
+  function removeScheduledCourse(courseEntries: Entry[]) {
+    const ids = new Set(courseEntries.map((entry) => entry.id));
+    setEntries((current) => current.filter((entry) => !ids.has(entry.id)));
+  }
+
   async function loadRequiredCourses() {
     if (!department.trim()) return toast.error(t("Bölüm kodu gerekli.", "Department code is required."));
     setCatalogBusy(true); setCurriculumNotice(""); setSelectedCourse(null); setCatalogSections([]);
     try {
-      const [curriculum, offering] = await Promise.all([
-        jsonFetch<{ categories: unknown; category_courses: { category?: unknown; courses?: unknown }[] }>("/api/schedule/curriculum"),
-        jsonFetch<{ data: unknown }>(`/api/schedule/courses?department=${encodeURIComponent(department.trim())}&semester=${encodeURIComponent(term)}`),
-      ]);
-      const required = parseCurriculumCourses(curriculum, semester);
-      const offered = parseCourses(offering.data);
-      const offeredByIdentity = new Map(offered.map((course) => [courseIdentity(course.rawCode), course]));
-      const seen = new Set<string>();
-      const courses = required.flatMap((course) => {
-        const live = offeredByIdentity.get(courseIdentity(course.rawCode));
-        const identity = courseIdentity(course.rawCode);
-        if (!live || seen.has(identity)) return [];
-        seen.add(identity);
-        return [{ ...live, credits: course.credits || live.credits }];
-      });
-      setCatalogCourses(courses);
-      if (!required.length) {
-        setCurriculumNotice(t("Seçilen program dönemi müfredat verisinde bulunamadı.", "The selected program semester was not found in the curriculum data."));
-      } else if (!courses.length) {
-        setCurriculumNotice(t("Müfredat dersleri bulundu ancak seçilen akademik dönemde açılan eşleşme yok.", "Curriculum courses were found, but none match the selected academic term."));
-      } else {
-        setCurriculumNotice(t(`${courses.length} müfredat dersi bu akademik dönemde açılıyor. Şube seçerek tabloya ekleyebilirsin.`, `${courses.length} curriculum courses are offered this term. Choose sections to add them to the grid.`));
-      }
+      const result = await requestAiPlan([]);
+      setCatalogCourses(result.courses);
+      setCurriculumNotice(result.courses.length
+        ? t(`${result.courses.length} ders AI ajanı tarafından MCP verileriyle doğrulandı.${result.warnings.length ? ` ${result.warnings.join(" ")}` : ""}`, `${result.courses.length} courses were verified by the AI agent using MCP data.${result.warnings.length ? ` ${result.warnings.join(" ")}` : ""}`)
+        : t("AI ajanı bu dönem için doğrulanmış zorunlu ders bulamadı.", "The AI agent found no verified required courses for this term."));
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t("Müfredat dersleri alınamadı.", "Curriculum courses could not be loaded."));
     } finally { setCatalogBusy(false); }
@@ -269,16 +290,15 @@ export function SchedulePlanner() {
   async function loadSections(course: CatalogCourse) {
     setCatalogBusy(true); setSelectedCourse(course); setCatalogSections([]);
     try {
-      const sections = await fetchSections(course);
+      let sections = aiSections[courseIdentity(course.rawCode)] ?? [];
+      if (!sections.length) {
+        const fallback = await requestAiPlan([course]);
+        sections = fallback.sections[courseIdentity(course.rawCode)] ?? [];
+      }
       setCatalogSections(sections);
       if (!sections.length) toast.error(t("Şube saatleri okunamadı; ders ayrıntısı eksik olabilir.", "Section times could not be read; course details may be incomplete."));
     } catch (error) { toast.error(error instanceof Error ? error.message : t("Şubeler alınamadı.", "Sections could not be loaded.")); }
     finally { setCatalogBusy(false); }
-  }
-
-  async function fetchSections(course: CatalogCourse) {
-    const response = await jsonFetch<{ data: unknown }>(`/api/schedule/courses/${encodeURIComponent(course.rawCode)}?department=${encodeURIComponent(department.trim())}&semester=${encodeURIComponent(term)}`);
-    return parseSections(response.data);
   }
 
   async function generateSchedule() {
@@ -286,9 +306,12 @@ export function SchedulePlanner() {
     setCatalogBusy(true);
     try {
       const generated: Entry[] = [];
+      // One chatbot turn owns the whole plan. This keeps the schedule page
+      // from trying to reconcile partially incompatible raw MCP responses.
+      const assistantPlan = await requestAiPlan(catalogCourses);
       const missing: string[] = [];
       for (const course of catalogCourses) {
-        const sections = await fetchSections(course);
+        const sections = assistantPlan.sections[courseIdentity(course.rawCode)] ?? [];
         const chosen = sections.find((section) => section.meetings.every((meeting) => {
           const candidate = { day: meeting.day, start: meeting.start, duration: meeting.duration } as Entry;
           return emptyDay !== meeting.day && generated.every((entry) => !overlaps(entry, candidate));
@@ -380,10 +403,11 @@ export function SchedulePlanner() {
             </CardContent></Card>
 
             <Card><CardHeader><CardTitle>{t("Dönem dersleri", "Semester courses")}</CardTitle></CardHeader><CardContent className="grid gap-3">
-              <Button onClick={() => void loadRequiredCourses()} disabled={catalogBusy || departmentBusy || !department}>{catalogBusy ? t("Müfredat kontrol ediliyor…", "Checking curriculum…") : t("Almam gereken dersleri getir", "Load my required courses")}</Button>
+              <Button onClick={() => void loadRequiredCourses()} disabled={catalogBusy || departmentBusy || !department}><SparklesIcon />{catalogBusy ? t("AI ve MCP kontrol ediyor…", "AI and MCP are checking…") : t("Almam gereken dersleri AI ile getir", "Load required courses with AI")}</Button>
               <Button variant="outline" onClick={() => void loadCatalogCourses()} disabled={catalogBusy}>{t("Bölümde açılan tüm dersler", "All offered department courses")}</Button>
               {curriculumNotice ? <p className="rounded-lg border bg-muted/30 p-2 text-xs leading-5 text-muted-foreground">{curriculumNotice}</p> : null}
-              {catalogCourses.length ? <><Input value={catalogSearch} onChange={(e) => setCatalogSearch(e.target.value)} placeholder={t("Ders kodu veya adı ara", "Search course code or name")} /><div className="max-h-64 space-y-1 overflow-y-auto">{catalogCourses.filter((course) => `${course.code} ${course.name}`.toLowerCase().includes(catalogSearch.toLowerCase())).map((course) => <button key={course.rawCode} onClick={() => void loadSections(course)} className={cn("w-full rounded-lg border p-2 text-left text-sm transition hover:bg-accent", selectedCourse?.rawCode === course.rawCode && "border-primary bg-primary/5")}><span className="block font-semibold">{course.code}</span><span className="block truncate text-xs text-muted-foreground">{course.name}</span></button>)}</div></> : null}
+              <div className="rounded-lg border bg-muted/20 p-2"><p className="mb-2 text-xs font-medium">{t("Ders havuzuna elle ekle", "Add manually to course pool")}</p><div className="grid gap-2"><Input value={poolDraft.code} onChange={(e) => setPoolDraft({ ...poolDraft, code: e.target.value })} placeholder="5670201 / EE201" /><Input value={poolDraft.name} onChange={(e) => setPoolDraft({ ...poolDraft, name: e.target.value })} placeholder={t("Ders adı (isteğe bağlı)", "Course name (optional)")} /><Button size="sm" variant="outline" onClick={addPoolCourse}><PlusIcon />{t("Ders havuzuna ekle", "Add to course pool")}</Button></div></div>
+              {catalogCourses.length ? <><Input value={catalogSearch} onChange={(e) => setCatalogSearch(e.target.value)} placeholder={t("Ders kodu veya adı ara", "Search course code or name")} /><div className="max-h-64 space-y-1 overflow-y-auto">{catalogCourses.filter((course) => `${course.code} ${course.name}`.toLowerCase().includes(catalogSearch.toLowerCase())).map((course) => <div key={course.rawCode} className={cn("flex items-center gap-1 rounded-lg border p-1 transition hover:bg-accent", selectedCourse?.rawCode === course.rawCode && "border-primary bg-primary/5")}><button onClick={() => void loadSections(course)} className="min-w-0 flex-1 p-1 text-left text-sm"><span className="block font-semibold">{course.code}</span><span className="block truncate text-xs text-muted-foreground">{course.name}</span></button><Button size="icon" variant="ghost" aria-label={t(`${course.code} dersini havuzdan çıkar`, `Remove ${course.code} from course pool`)} onClick={() => removePoolCourse(course)}><Trash2Icon /></Button></div>)}</div></> : null}
               {selectedCourse && catalogSections.length ? <div className="space-y-2 border-t pt-3"><p className="text-sm font-semibold">{selectedCourse.code} · {t("Şubeler", "Sections")}</p>{catalogSections.map((section) => <button key={section.section} onClick={() => addCatalogSection(section)} className="w-full rounded-lg border p-2 text-left text-sm transition hover:border-primary/40 hover:bg-primary/5"><span className="font-semibold">{t("Şube", "Section")} {section.section}</span>{section.instructor ? <span className="ml-2 text-xs text-muted-foreground">{section.instructor}</span> : null}<span className="mt-1 block text-xs text-muted-foreground">{section.meetings.map((meeting) => `${dayLabel(meeting.day)} ${String(meeting.start).padStart(2,"0")}:40${meeting.room ? ` · ${meeting.room}` : ""}`).join(" / ")}</span></button>)}</div> : null}
             </CardContent></Card>
 
@@ -407,7 +431,7 @@ export function SchedulePlanner() {
 
             <div className="flex flex-wrap gap-2"><Button onClick={() => void generateSchedule()} disabled={catalogBusy}><SparklesIcon />{catalogBusy ? t("Program oluşturuluyor…", "Generating schedule…") : t("Programı oluştur", "Generate schedule")}</Button><Button variant="outline" onClick={() => setShowTravel((v) => !v)}>{showTravel ? <CheckIcon /> : <CalendarDaysIcon />}{t("Geçiş süreleri", "Travel times")}</Button><Button variant="outline" onClick={() => void copyShareLink()}><ClipboardIcon />{t("Paylaşım bağlantısı", "Share link")}</Button><Button variant="outline" onClick={() => window.print()}><DownloadIcon />{t("Programı dışa aktar", "Export schedule")}</Button><Button variant="outline" onClick={exportWallpaper}><DownloadIcon />{t("4K duvar kâğıdı", "4K wallpaper")}</Button>{favorites.length ? <Button variant="ghost" onClick={() => setEntries(favorites[(favorites.findIndex((plan) => plan === entries) + 1) % favorites.length] ?? favorites[0])}>{t("Sonraki favori", "Next favorite")}</Button> : null}</div>
             {showTravel && <Card><CardContent className="p-4 text-sm text-muted-foreground">{t("Arka arkaya gelen derslerde derslikleri kontrol et. Farklı binalar arasındaki geçişler programda özellikle işaretlenecek.", "Check rooms for back-to-back classes. Travel between different buildings is highlighted in the plan.")}</CardContent></Card>}
-            {entries.length > 0 && <Card><CardHeader><CardTitle>{t("Eklenen dersler", "Added courses")}</CardTitle></CardHeader><CardContent className="space-y-2">{entries.map((entry) => <div key={entry.id} className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2"><div className="min-w-0"><p className="truncate font-medium">{entry.code} · {entry.name}</p><p className="text-xs text-muted-foreground">{dayLabel(entry.day)} {String(entry.start).padStart(2,"0")}:40 · {t("Şube", "Section")} {entry.section}</p></div><Button size="icon" variant="ghost" aria-label={t("Dersi kaldır", "Remove course")} onClick={() => setEntries((current) => current.filter((item) => item.id !== entry.id))}><Trash2Icon /></Button></div>)}</CardContent></Card>}
+            {entries.length > 0 && <Card><CardHeader><CardTitle>{t("Eklenen dersler", "Added courses")}</CardTitle></CardHeader><CardContent className="space-y-2">{scheduledCourseGroups.map((courseEntries) => { const entry = courseEntries[0]; return <div key={`${entry.code}-${entry.section}`} className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2"><div className="min-w-0"><p className="truncate font-medium">{entry.code} · {entry.name}</p><p className="text-xs text-muted-foreground">{courseEntries.map((meeting) => `${dayLabel(meeting.day)} ${String(meeting.start).padStart(2,"0")}:40`).join(" / ")} · {t("Şube", "Section")} {entry.section}</p></div><Button size="icon" variant="ghost" aria-label={t("Dersi kaldır", "Remove course")} onClick={() => removeScheduledCourse(courseEntries)}><Trash2Icon /></Button></div>; })}</CardContent></Card>}
           </main>
         </div>
       </div>
