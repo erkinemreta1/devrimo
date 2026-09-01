@@ -113,3 +113,45 @@ export type RuntimeSettings = {
   updated_at: string | null;
   editable: boolean;
 };
+
+export type KnowledgeSource = {
+  id: string;
+  name: string;
+  kind: string;
+  url: string | null;
+  language: string;
+  authority: number;
+  audience: Record<string, unknown>;
+  schedule_seconds: number;
+  enabled: boolean;
+  status: string;
+  active_revision_id: string | null;
+  last_fetched_at: string | null;
+  last_success_at: string | null;
+  last_error: string | null;
+  revisions: number | null;
+  records: number | null;
+};
+
+export type SourceRevision = {
+  id: string;
+  revision: number;
+  status: string;
+  config: Record<string, unknown>;
+  validation: { ok: boolean; errors: string[]; warnings: string[] };
+  created_at: string;
+  published_at: string | null;
+};
+
+export type KnowledgeSourceDetail = KnowledgeSource & { revision_history: SourceRevision[] };
+
+export type CourseGroup = {
+  id: string;
+  term: string;
+  course_code: string;
+  section: string | null;
+  eligibility: Record<string, unknown>;
+  active: boolean;
+  valid_until: string | null;
+  has_invite_url: boolean;
+};

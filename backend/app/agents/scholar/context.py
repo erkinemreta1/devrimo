@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.pool import ResidentAgent
 from app.campus import service as campus_service
+from app.student import service as student_service
 
 ISTANBUL = ZoneInfo("Europe/Istanbul")
 
@@ -24,10 +25,21 @@ def _academic_term_hint(now: datetime) -> str:
 
 async def build_run_dependencies(db: AsyncSession, user_id, resident: ResidentAgent) -> dict[str, object]:
     profile = await campus_service.get_profile(db, user_id)
+    student_context = await student_service.get_context(db, user_id)
+    preferences = await student_service.list_preferences(db, user_id)
     now = datetime.now(ISTANBUL)
     return {
         "display_name": profile.display_name if profile else None,
         "department": profile.department if profile else None,
+        "academic_identity": {
+            "department": student_context.department,
+            "degree_level": student_context.degree_level,
+            "program_code": student_context.program_code,
+            "campus": student_context.campus,
+            "source": student_context.source,
+            "confirmed": student_context.confirmed_at is not None,
+        },
+        "benign_preferences": {item.key: item.value for item in preferences},
         "locale": profile.locale if profile else "tr",
         "enabled_tools": list(resident.tool_ids),
         "local_datetime": now.strftime("%Y-%m-%d %H:%M (%A)"),

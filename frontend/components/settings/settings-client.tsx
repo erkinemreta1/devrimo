@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   BrainIcon,
@@ -32,10 +33,14 @@ import { CampusConnectionCard } from "@/components/settings/campus-connection-ca
 import { useProfile } from "@/hooks/useProfile";
 import { useMemories } from "@/hooks/useMemories";
 import { captureError, captureProductEvent } from "@/components/posthog-analytics";
+import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 
 export function SettingsClient() {
   const { pick } = useLocale();
-  const { update: updateProfile } = useProfile();
+  const { profile, update: updateProfile } = useProfile();
   const { memories, isLoading: memoriesLoading, clear: clearMemories } = useMemories();
 
   useEffect(() => {
@@ -66,6 +71,7 @@ export function SettingsClient() {
     { href: "#connection", icon: CableIcon, label: pick({ tr: "ODTÜ bağlantısı", en: "METU connection" }) },
     { href: "#privacy", icon: ShieldCheckIcon, label: pick({ tr: "Veri erişimi", en: "Data access" }) },
     { href: "#memory", icon: BrainIcon, label: pick({ tr: "Hatırlananlar", en: "Remembered items" }) },
+    { href: "#personalization", icon: SparklesIcon, label: pick({ tr: "Kişiselleştirme", en: "Personalization" }) },
     { href: "#setup", icon: RotateCcwIcon, label: pick({ tr: "Kurulum", en: "Setup" }) },
   ];
 
@@ -102,6 +108,11 @@ export function SettingsClient() {
 
         <main className="min-w-0 space-y-5">
           <CampusConnectionCard />
+
+          <Card id="personalization" className="motion-enter surface-raised scroll-mt-24 border-0 ring-1 ring-foreground/8 [animation-delay:40ms]">
+            <CardHeader className="border-b bg-muted/20"><div className="flex items-start gap-3"><span className="grid size-9 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary"><SparklesIcon className="size-4" /></span><div><CardTitle>{pick({ tr: "Kişiselleştirme ve güncellemeler", en: "Personalization and updates" })}</CardTitle><CardDescription className="mt-1">{pick({ tr: "İlgi alanlarını düzenle ve e-postadan yalnızca yapılandırılmış tarih/etkinlik bilgisi çıkarılmasına izin ver.", en: "Edit your interests and choose whether email may yield structured date and event facts." })}</CardDescription></div></div></CardHeader>
+            <CardContent className="space-y-5"><AcademicContextEditor /><PreferenceEditor /><div className="grid grid-cols-[1fr_auto] items-start gap-4 rounded-xl border bg-background/55 p-4"><div><Label htmlFor="mail-facts" className="font-semibold">{pick({ tr: "E-postadan yapılandırılmış güncellemeler", en: "Structured updates from email" })}</Label><p className="mt-1 text-sm leading-5 text-muted-foreground">{pick({ tr: "Yalnızca etkinlik veya son tarih başlığı, özeti ve zamanı saklanır. Ham e-posta gövdesi kaydedilmez ve vektör dizinine gönderilmez.", en: "Only an event or deadline title, summary, and time are kept. Raw email bodies are not stored or embedded." })}</p></div><Switch id="mail-facts" checked={profile?.mail_facts_enabled ?? false} disabled={!profile || updateProfile.isPending} onCheckedChange={(checked) => void updateProfile.mutateAsync({ mail_facts_enabled: checked }).catch((error) => toast.error(error instanceof Error ? error.message : "Update failed"))} /></div></CardContent>
+          </Card>
 
           <Card id="memory" className="motion-enter surface-raised scroll-mt-24 border-0 ring-1 ring-foreground/8 [animation-delay:70ms]">
             <CardHeader className="border-b bg-muted/20">
@@ -152,4 +163,27 @@ export function SettingsClient() {
       </div>
     </div>
   );
+}
+
+type PreferenceItem = { key: string; value: Record<string, unknown>; provenance: "explicit" | "learned"; confidence: number; updated_at: string };
+
+type AcademicContext = { department: string | null; degree_level: string | null; program_code: string | null; campus: string | null; source: string; verified_at: string | null; confirmed_at: string | null; needs_confirmation: boolean };
+
+function AcademicContextEditor() {
+  const { pick } = useLocale(); const client = useQueryClient(); const query = useQuery({ queryKey: ["student", "context"], queryFn: async () => { const response = await fetch("/api/student/context"); if (!response.ok) throw new Error("Academic context unavailable"); return response.json() as Promise<AcademicContext>; } });
+  const [department, setDepartment] = useState(""); const [degree, setDegree] = useState("undergraduate"); const [program, setProgram] = useState(""); const [campus, setCampus] = useState("Ankara");
+  const mutation = useMutation({ mutationFn: async (body: Record<string, unknown>) => { const response = await fetch("/api/student/context", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); if (!response.ok) throw new Error((await response.json().catch(() => null))?.detail || "Academic context could not be saved"); return response.json() as Promise<AcademicContext>; }, onSuccess: (data) => { client.setQueryData(["student", "context"], data); toast.success(pick({ tr: "Akademik bağlam kaydedildi", en: "Academic context saved" })); }, onError: (error) => toast.error(error.message) });
+  const context = query.data;
+  return <div className="rounded-xl border bg-background/55 p-4"><div className="mb-3 flex flex-wrap items-center justify-between gap-2"><div><p className="font-semibold">{pick({ tr: "Akademik bağlam", en: "Academic context" })}</p><p className="text-xs text-muted-foreground">{context?.verified_at ? pick({ tr: "SAIS'ten doğrulandı; kullanmadan önce onayını bekliyor.", en: "Verified from SAIS; your confirmation is required before use." }) : pick({ tr: "SAIS doğrulaması yoksa elle düzenleyebilirsin.", en: "You can edit this manually when SAIS verification is unavailable." })}</p></div>{context ? <Badge variant={context.verified_at ? "secondary" : "outline"}>{context.source}</Badge> : null}</div>{context?.needs_confirmation ? <div className="flex items-center justify-between gap-3 rounded-lg border border-primary/20 bg-primary/5 p-3"><p className="text-sm">{[context.department, context.degree_level, context.program_code, context.campus].filter(Boolean).join(" · ")}</p><Button size="sm" onClick={() => mutation.mutate({ confirm_verified: true })}>{pick({ tr: "Doğrula", en: "Confirm" })}</Button></div> : <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><Input value={department} onChange={(event) => setDepartment(event.target.value)} placeholder={context?.department || pick({ tr: "Bölüm", en: "Department" })} /><Select value={degree} onValueChange={(value) => setDegree(value ?? "undergraduate")}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{["undergraduate", "masters", "doctoral", "exchange", "other"].map((value) => <SelectItem key={value} value={value}>{value}</SelectItem>)}</SelectContent></Select><Input value={program} onChange={(event) => setProgram(event.target.value)} placeholder={context?.program_code || pick({ tr: "Program kodu", en: "Program code" })} /><div className="flex gap-2"><Input value={campus} onChange={(event) => setCampus(event.target.value)} placeholder={context?.campus || pick({ tr: "Kampüs", en: "Campus" })} /><Button variant="outline" disabled={mutation.isPending} onClick={() => mutation.mutate({ department: department || context?.department, degree_level: degree, program_code: program || context?.program_code, campus: campus || context?.campus })}>{pick({ tr: "Kaydet", en: "Save" })}</Button></div></div>}</div>;
+}
+
+function PreferenceEditor() {
+  const { pick } = useLocale();
+  const client = useQueryClient();
+  const [interests, setInterests] = useState("");
+  const [device, setDevice] = useState("unspecified");
+  const query = useQuery({ queryKey: ["student", "preferences"], queryFn: async () => { const response = await fetch("/api/student/preferences"); if (!response.ok) throw new Error("Preferences unavailable"); return response.json() as Promise<{ items: PreferenceItem[] }>; } });
+  const save = useMutation({ mutationFn: async ({ key, value }: { key: string; value: Record<string, unknown> }) => { const response = await fetch(`/api/student/preferences/${key}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ value }) }); if (!response.ok) throw new Error((await response.json().catch(() => null))?.detail || "Preference could not be saved"); }, onSuccess: () => { toast.success(pick({ tr: "Tercih kaydedildi", en: "Preference saved" })); void client.invalidateQueries({ queryKey: ["student", "preferences"] }); }, onError: (error) => toast.error(error.message) });
+  const remove = useMutation({ mutationFn: async (key: string) => { const response = await fetch(`/api/student/preferences/${key}`, { method: "DELETE" }); if (!response.ok) throw new Error("Preference could not be removed"); }, onSuccess: () => void client.invalidateQueries({ queryKey: ["student", "preferences"] }) });
+  return <div className="space-y-4"><div className="grid gap-3 sm:grid-cols-[1fr_12rem_auto]"><div className="space-y-2"><Label htmlFor="interests">{pick({ tr: "İlgi alanları", en: "Interests" })}</Label><Input id="interests" value={interests} onChange={(event) => setInterests(event.target.value)} placeholder={pick({ tr: "sinema, caz, robotik", en: "cinema, jazz, robotics" })} /></div><div className="space-y-2"><Label>{pick({ tr: "Cihaz", en: "Device" })}</Label><Select value={device} onValueChange={(value) => setDevice(value ?? "unspecified")}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{["unspecified", "ios", "android", "windows", "macos", "linux"].map((value) => <SelectItem key={value} value={value}>{value}</SelectItem>)}</SelectContent></Select></div><div className="flex items-end"><Button variant="outline" disabled={save.isPending || (!interests.trim() && device === "unspecified")} onClick={() => { if (interests.trim()) save.mutate({ key: "interests", value: { items: interests.split(",").map((item) => item.trim()).filter(Boolean) } }); if (device !== "unspecified") save.mutate({ key: "device_platform", value: { platform: device } }); }}>{pick({ tr: "Kaydet", en: "Save" })}</Button></div></div>{query.data?.items.length ? <div className="flex flex-wrap gap-2">{query.data.items.map((item) => <Badge key={item.key} variant="secondary" className="gap-2 py-1.5">{item.key.replaceAll("_", " ")} · {item.provenance}<button type="button" className="rounded-full hover:text-destructive" aria-label={pick({ tr: "Tercihi sil", en: "Delete preference" })} onClick={() => remove.mutate(item.key)}>×</button></Badge>)}</div> : null}</div>;
 }

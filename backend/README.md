@@ -32,6 +32,9 @@ app/
     credentials.py        The only module that decrypts a METU password
     verify.py             One SSO sign-in, to check credentials before storing
     service.py            Profile + credential persistence
+  knowledge/              Versioned sources, adapters, ingestion, hybrid retrieval
+  planning/               Deterministic eligibility and maximum-GPA planning
+  student/                Verified context, preferences, updates, mail facts
   agentos/                JWT-protected operations/measurement service
   api/v1/                 Routes: agents, campus, chat, memories, profile, sessions
   schemas.py              Response shapes, kept in lockstep with the frontend
@@ -39,6 +42,12 @@ alembic/                  Schema migrations
 tests/                    Full API test suite against the echo model
 evals/                    Synthetic routing, grounding, bilingual, and safety evals
 ```
+
+The campus knowledge layer has a separate worker, an administrator-controlled
+source registry, reviewed publication, PostgreSQL full-text plus optional
+pgvector retrieval, deterministic academic planning, and protected course-group
+links. Its operating and extension guide is in
+[`docs/campus-intelligence.md`](../docs/campus-intelligence.md).
 
 ## Architecture
 

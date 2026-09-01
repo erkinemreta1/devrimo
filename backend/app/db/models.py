@@ -2,6 +2,7 @@ import enum
 import uuid
 from datetime import datetime
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     JSON,
     Boolean,
@@ -13,8 +14,10 @@ from sqlalchemy import (
     Index,
     Integer,
     LargeBinary,
+    Numeric,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -211,6 +214,7 @@ class UserProfile(Base):
     display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     department: Mapped[str | None] = mapped_column(String(255), nullable=True)
     locale: Mapped[str] = mapped_column(String(8), default="tr", nullable=False)
+    mail_facts_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     # The step the student would land on if they reloaded mid-flow. Free-form
     # rather than an enum so the frontend can re-order the wizard without a
@@ -294,3 +298,310 @@ class AgentToolAudit(Base):
     duration_ms: Mapped[int] = mapped_column(Integer, nullable=False)
     error_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class CampusSource(Base):
+    """Admin-configured public or curated campus information source."""
+
+    __tablename__ = "campus_sources"
+    __table_args__ = (
+        CheckConstraint(
+            "kind IN ('drupal', 'html_page', 'html_table', 'rss', 'ical', 'json', 'pdf', "
+            "'approved_social', 'email_facts', 'curated')",
+            name="ck_campus_sources_kind",
+        ),
+        CheckConstraint("status IN ('draft', 'published', 'disabled')", name="ck_campus_sources_status"),
+        Index("ix_campus_sources_org_status", "organization_id", "status", "enabled"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organizations.id"), nullable=False)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    language: Mapped[str] = mapped_column(String(8), default="tr", nullable=False)
+    authority: Mapped[int] = mapped_column(Integer, default=50, nullable=False)
+    audience: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    schedule_seconds: Mapped[int] = mapped_column(Integer, default=3600, nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="draft", nullable=False)
+    active_revision_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
+    etag: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_modified: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class CampusSourceRevision(Base):
+    __tablename__ = "campus_source_revisions"
+    __table_args__ = (
+        UniqueConstraint("source_id", "revision", name="uq_campus_source_revisions_source_revision"),
+        CheckConstraint("status IN ('draft', 'valid', 'published', 'rejected')", name="ck_source_revision_status"),
+        Index("ix_source_revisions_source_created", "source_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    source_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("campus_sources.id", ondelete="CASCADE"), nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="draft", nullable=False)
+    config: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    validation: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class CampusIngestionJob(Base):
+    __tablename__ = "campus_ingestion_jobs"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('queued', 'leased', 'completed', 'failed', 'dead')", name="ck_ingestion_jobs_status"
+        ),
+        Index("ix_ingestion_jobs_claim", "status", "available_at", "created_at"),
+        Index("ix_ingestion_jobs_source_created", "source_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    source_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("campus_sources.id", ondelete="CASCADE"), nullable=False)
+    revision_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("campus_source_revisions.id", ondelete="CASCADE"), nullable=False
+    )
+    status: Mapped[str] = mapped_column(String(16), default="queued", nullable=False)
+    attempt: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    leased_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    lease_owner: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class CampusKnowledgeRecord(Base):
+    """Canonical public fact. Only this table is eligible for embeddings."""
+
+    __tablename__ = "campus_knowledge_records"
+    __table_args__ = (
+        UniqueConstraint("source_id", "external_id", name="uq_knowledge_records_source_external"),
+        CheckConstraint(
+            "record_type IN ('announcement', 'calendar', 'event', 'service_status', 'guide', 'course', 'policy')",
+            name="ck_knowledge_records_type",
+        ),
+        Index("ix_knowledge_records_source_current", "source_id", "is_current"),
+        Index("ix_knowledge_records_type_dates", "record_type", "starts_at", "ends_at"),
+        Index("ix_knowledge_records_audience", "campus", "department", "degree_level"),
+        Index("ix_knowledge_records_published", "published_at", "id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    source_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("campus_sources.id", ondelete="CASCADE"), nullable=False)
+    source_revision_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("campus_source_revisions.id", ondelete="CASCADE"), nullable=False
+    )
+    external_id: Mapped[str] = mapped_column(Text, nullable=False)
+    record_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    language: Mapped[str] = mapped_column(String(8), default="tr", nullable=False)
+    campus: Mapped[str | None] = mapped_column(Text, nullable=True)
+    department: Mapped[str | None] = mapped_column(Text, nullable=True)
+    degree_level: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    audience: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    starts_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    valid_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    authority: Mapped[int] = mapped_column(Integer, default=50, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    metadata_json: Mapped[dict] = mapped_column("metadata", JSON, default=dict, nullable=False)
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(1536), nullable=True)
+    embedding_model: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_current: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    removed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class StudentContext(Base):
+    __tablename__ = "student_contexts"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
+    department: Mapped[str | None] = mapped_column(Text, nullable=True)
+    degree_level: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    program_code: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    campus: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source: Mapped[str] = mapped_column(String(32), default="manual", nullable=False)
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class UserPreference(Base):
+    __tablename__ = "user_preferences"
+    __table_args__ = (
+        UniqueConstraint("user_id", "key", name="uq_user_preferences_user_key"),
+        CheckConstraint("provenance IN ('explicit', 'learned')", name="ck_user_preferences_provenance"),
+        Index("ix_user_preferences_user_updated", "user_id", "updated_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(nullable=False)
+    key: Mapped[str] = mapped_column(String(64), nullable=False)
+    value: Mapped[dict] = mapped_column(JSON, nullable=False)
+    provenance: Mapped[str] = mapped_column(String(16), nullable=False)
+    confidence: Mapped[float] = mapped_column(Numeric(4, 3), default=1, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class UserUpdateState(Base):
+    __tablename__ = "user_update_states"
+    __table_args__ = (Index("ix_user_update_states_user_updated", "user_id", "updated_at"),)
+
+    user_id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
+    record_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("campus_knowledge_records.id", ondelete="CASCADE"), primary_key=True
+    )
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    dismissed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class StudentAcademicSnapshot(Base):
+    """Sensitive planning inputs; deliberately separate and never embedded."""
+
+    __tablename__ = "student_academic_snapshots"
+    __table_args__ = (Index("ix_academic_snapshots_user_fetched", "user_id", "fetched_at"),)
+
+    user_id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
+    term: Mapped[str] = mapped_column(String(32), primary_key=True)
+    completed_courses: Mapped[list[dict]] = mapped_column(JSON, default=list, nullable=False)
+    enrolled_courses: Mapped[list[dict]] = mapped_column(JSON, default=list, nullable=False)
+    current_credits: Mapped[float] = mapped_column(Numeric(8, 2), default=0, nullable=False)
+    current_grade_points: Mapped[float] = mapped_column(Numeric(10, 3), default=0, nullable=False)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    source: Mapped[str] = mapped_column(String(32), default="sais", nullable=False)
+
+
+class CourseOffering(Base):
+    __tablename__ = "course_offerings"
+    __table_args__ = (
+        UniqueConstraint("term", "course_code", "section", name="uq_course_offerings_term_course_section"),
+        Index("ix_course_offerings_term_course", "term", "course_code"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    term: Mapped[str] = mapped_column(String(32), nullable=False)
+    course_code: Mapped[str] = mapped_column(String(32), nullable=False)
+    section: Mapped[str] = mapped_column(String(16), default="1", nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    credits: Mapped[float] = mapped_column(Numeric(6, 2), nullable=False)
+    schedule: Mapped[list[dict]] = mapped_column(JSON, default=list, nullable=False)
+    campus: Mapped[str | None] = mapped_column(Text, nullable=True)
+    department: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class CourseRule(Base):
+    __tablename__ = "course_rules"
+
+    course_code: Mapped[str] = mapped_column(String(32), primary_key=True)
+    prerequisites: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    exclusions: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    catalog_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    revision: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class PlanningPolicy(Base):
+    __tablename__ = "planning_policies"
+    __table_args__ = (
+        UniqueConstraint("organization_id", "name", "revision", name="uq_planning_policies_org_name_revision"),
+        Index("ix_planning_policies_org_active", "organization_id", "active"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organizations.id"), nullable=False)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    rules: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class CourseGroupLink(Base):
+    __tablename__ = "course_group_links"
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id", "term", "course_code", "section", name="uq_course_group_links_course_section"
+        ),
+        Index("ix_course_group_links_lookup", "term", "course_code", "section", "active"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    organization_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organizations.id"), nullable=False)
+    term: Mapped[str] = mapped_column(String(32), nullable=False)
+    course_code: Mapped[str] = mapped_column(String(32), nullable=False)
+    section: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    invite_url_enc: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    eligibility: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    valid_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class CourseGroupAccessAudit(Base):
+    __tablename__ = "course_group_access_audit"
+    __table_args__ = (Index("ix_course_group_access_user_created", "user_id", "created_at"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(nullable=False)
+    group_id: Mapped[uuid.UUID] = mapped_column(nullable=False)
+    result: Mapped[str] = mapped_column(String(32), nullable=False)
+    reason_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class UserMailFact(Base):
+    """Opt-in structured mail fact. Raw message bodies are never stored."""
+
+    __tablename__ = "user_mail_facts"
+    __table_args__ = (
+        UniqueConstraint("user_id", "external_id", name="uq_user_mail_facts_user_external"),
+        Index("ix_user_mail_facts_user_dates", "user_id", "starts_at", "valid_until"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(nullable=False)
+    external_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    fact_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    sender_domain: Mapped[str | None] = mapped_column(Text, nullable=True)
+    starts_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    valid_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    message_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    extracted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

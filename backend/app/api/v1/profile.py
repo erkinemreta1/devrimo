@@ -46,6 +46,8 @@ async def patch_profile(
         profile.department = changes["department"]
     if changes.get("locale"):
         profile.locale = changes["locale"]
+    if "mail_facts_enabled" in changes and changes["mail_facts_enabled"] is not None:
+        profile.mail_facts_enabled = changes["mail_facts_enabled"]
     if "onboarding_step" in changes:
         profile.onboarding_step = changes["onboarding_step"]
     if "onboarding_completed" in changes and changes["onboarding_completed"] is not None:
