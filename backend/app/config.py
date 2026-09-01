@@ -80,6 +80,41 @@ class Settings(BaseSettings):
     campus_state_root: str = "/var/lib/devrimo/campus"
     campus_mcp_timeout_seconds: int = 30
 
+    # --- Campus knowledge (public campus content) --------------------------
+    # The corpus of public METU content the agent can search. Distinct from the
+    # campus MCP servers above in every way that matters: it is shared rather
+    # than per-student, carries no credentials, and is built from sources that
+    # admins configure at runtime rather than from this file.
+    campus_knowledge_enabled: bool = True
+    campus_ingest_interval_seconds: int = 300
+    # How long a source may hold the ingest loop. A slow site must not be able
+    # to starve the other sources on the same tick.
+    campus_ingest_source_timeout_seconds: int = 300
+    campus_fetch_timeout_seconds: int = 20
+    campus_fetch_max_bytes: int = 4_000_000
+    campus_fetch_user_agent: str = "DevrimoBot/1.0 (+https://devrimo.metu.edu.tr/bot)"
+    # Hosts the fetcher may talk to at all, as comma-separated patterns. Source
+    # rows are admin-editable, so this is the boundary that keeps a compromised
+    # admin account from pointing the fetcher at the broker's own network — see
+    # app/campus/sources/fetch.py.
+    campus_fetch_allowed_hosts: str = "*.metu.edu.tr"
+    campus_fetch_default_crawl_delay_seconds: float = 1.0
+    campus_fetch_max_crawl_delay_seconds: float = 15.0
+
+    campus_knowledge_table: str = "campus_documents"
+    campus_knowledge_schema: str = "ai"
+    campus_knowledge_max_results: int = 8
+
+    # Embeddings are bought from an OpenAI-compatible endpoint. Left empty the
+    # whole knowledge layer reports itself unconfigured and Scholar is built
+    # exactly as it is today, which is what keeps local development cheap.
+    # Changing the model or the dimension invalidates every stored vector; the
+    # admin surface offers a reindex for exactly that reason.
+    embedding_model: str = "text-embedding-3-small"
+    embedding_base_url: str = ""
+    embedding_api_key: str = ""
+    embedding_dimensions: int = 1536
+
     secret_encryption_key: str = "change-me-to-a-real-generated-secret"
 
     # --- AgentOS -----------------------------------------------------------
@@ -110,6 +145,25 @@ class Settings(BaseSettings):
     @property
     def agentos_cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.agentos_cors_origins.split(",") if origin.strip()]
+
+    @property
+    def campus_fetch_allowed_host_patterns(self) -> list[str]:
+        return [value.strip().lower() for value in self.campus_fetch_allowed_hosts.split(",") if value.strip()]
+
+    @property
+    def database_is_postgres(self) -> bool:
+        return self.database_url.startswith(("postgresql", "postgres+", "postgres:"))
+
+    @property
+    def knowledge_configured(self) -> bool:
+        """Whether a real vector-backed corpus can be built.
+
+        Three things have to hold at once, and any of them missing is a normal
+        state rather than an error: the operator has not turned it off, the
+        database is Postgres (pgvector has no SQLite equivalent, and the test
+        suite runs on SQLite), and an embedding key exists.
+        """
+        return bool(self.campus_knowledge_enabled and self.database_is_postgres and self.embedding_api_key)
 
     @property
     def admin_bootstrap_ids(self) -> set[str]:

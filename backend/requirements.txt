@@ -20,8 +20,20 @@ opentelemetry-sdk>=1.28,<2.0
 openinference-instrumentation-agno>=0.1,<1.0
 openai>=1.60,<4.0
 # Agno's database layer is synchronous and builds its own engine, so Postgres
-# deployments need the sync driver alongside asyncpg.
+# deployments need the sync driver alongside asyncpg. The campus knowledge
+# corpus goes through the same synchronous layer, which is why its writes run
+# in a worker thread rather than on the event loop.
 psycopg[binary]>=3.2,<4.0
+# The SQLAlchemy type for the `vector` column the campus corpus is stored in.
+# Import-time dependency of agno.vectordb.pgvector, so it is needed wherever the
+# corpus is configured. Deployments on SQLite never construct it — see
+# app/knowledge/store.py, where an unconfigured corpus is a normal state.
+pgvector>=0.3,<1.0
+# HTML parsing for the campus adapters is deliberately absent from this list.
+# The METU sites are server-rendered Drupal, WordPress, and PHP; `html.parser`
+# from the standard library covers them (see app/campus/sources/htmlkit.py),
+# and a parsing dependency here would be one more thing to keep current for no
+# capability the adapters actually need.
 # Observability. `posthog` arrives transitively via agno, but every LLM
 # generation, exception, and log line in this service depends on it, so it is
 # pinned here rather than left to a transitive resolution. The `otel` extra

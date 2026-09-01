@@ -10,6 +10,7 @@ from app.agents.reconciler import run_reconciler_loop
 from app.api.v1 import router as api_v1_router
 from app.api.v1.admin import sync_directory
 from app.campus.manifest import commits_by_slug
+from app.campus.sources.ingest import run_ingest_loop
 from app.config import get_settings
 from app.db.session import SessionLocal
 from app.logging import configure_logging, get_logger
@@ -55,6 +56,10 @@ async def lifespan(app: FastAPI):
     stop_event = asyncio.Event()
     reconciler_task = asyncio.create_task(run_reconciler_loop(stop_event))
     directory_sync_task = asyncio.create_task(_run_directory_sync_loop(stop_event))
+    # Keeps the public campus corpus current. Independent of the reconciler
+    # because it fails differently: a campus site being down is routine and
+    # per-source, while the reconciler's job is holding student credentials.
+    ingest_task = asyncio.create_task(run_ingest_loop(stop_event))
     logger.info("startup_complete")
     try:
         yield
@@ -62,6 +67,7 @@ async def lifespan(app: FastAPI):
         stop_event.set()
         await reconciler_task
         await directory_sync_task
+        await ingest_task
         # Every resident agent is holding MCP subprocesses that have a
         # student's METU credentials in their environment; leaving them
         # parented to a dead broker is not acceptable.

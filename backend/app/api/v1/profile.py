@@ -44,6 +44,8 @@ async def patch_profile(
         profile.display_name = changes["display_name"]
     if "department" in changes:
         profile.department = changes["department"]
+    if "degree_level" in changes:
+        profile.degree_level = changes["degree_level"]
     if changes.get("locale"):
         profile.locale = changes["locale"]
     if "onboarding_step" in changes:

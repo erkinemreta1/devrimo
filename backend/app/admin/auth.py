@@ -29,6 +29,14 @@ class AdminPermission(StrEnum):
     runtime_read = "runtime:read"
     runtime_write = "runtime:write"
     system_read = "system:read"
+    # Campus knowledge. Split three ways because the jobs differ: reading
+    # source health during an incident, editing what the corpus is built from,
+    # and forcing a crawl are not the same authority.
+    sources_read = "sources:read"
+    sources_write = "sources:write"
+    sources_run = "sources:run"
+    curated_write = "curated:write"
+    knowledge_manage = "knowledge:manage"
 
 
 ROLE_PERMISSIONS = {
@@ -46,6 +54,12 @@ ROLE_PERMISSIONS = {
         AdminPermission.audit_export,
         AdminPermission.runtime_read,
         AdminPermission.system_read,
+        # An operator handles incidents: they can see a source failing and
+        # force a re-crawl, but changing what the corpus is built from is
+        # campus-content work, not operations.
+        AdminPermission.sources_read,
+        AdminPermission.sources_run,
+        AdminPermission.knowledge_manage,
     },
     AdminRole.campus_admin: {
         AdminPermission.overview_read,
@@ -55,6 +69,11 @@ ROLE_PERMISSIONS = {
         AdminPermission.integrations_read,
         AdminPermission.runtime_read,
         AdminPermission.system_read,
+        # Curating campus content is precisely this role's job.
+        AdminPermission.sources_read,
+        AdminPermission.sources_write,
+        AdminPermission.sources_run,
+        AdminPermission.curated_write,
     },
 }
 

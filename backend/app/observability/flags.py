@@ -101,6 +101,11 @@ FLAG_AGENT_PROFILE = "agent-profile"
 FLAG_AGENT_MODEL = "agent-model"
 FLAG_TOOL_CALL_LIMIT = "scholar-tool-call-limit"
 FLAG_HISTORY_RUNS = "scholar-history-runs"
+# The kill switch for campus retrieval. Distinct from the admin toggle because
+# the situation it exists for is different: retrieval serving something wrong to
+# one cohort is an incident, and this turns it off for them without a deploy and
+# without taking the corpus away from everyone.
+FLAG_CAMPUS_KNOWLEDGE = "campus-knowledge-enabled"
 
 
 def enabled_campus_tool_ids(default: list[str], *, distinct_id: str | None = None) -> list[str]:

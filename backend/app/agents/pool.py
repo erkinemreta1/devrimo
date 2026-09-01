@@ -50,7 +50,10 @@ class ResidentAgent:
     # while the agent was resident.
     tool_ids: tuple[str, ...] = ()
     credential_revision: int = 0
-    runtime_revision: int = 0
+    # ``AgentRuntimeConfig.cache_key``: more than one admin-editable row feeds
+    # one agent now, so a single revision number can no longer identify the
+    # configuration this agent was built from.
+    runtime_revision: tuple = ()
     active_leases: int = 0
     retired: bool = False
     closed: bool = False
@@ -109,7 +112,7 @@ class AgentPool:
                 entry is not None
                 and entry.tool_ids == wanted
                 and entry.credential_revision == credential_revision
-                and entry.runtime_revision == runtime.revision
+                and entry.runtime_revision == runtime.cache_key
             ):
                 entry.touch()
                 self._entries.move_to_end(user_id)
@@ -183,7 +186,7 @@ class AgentPool:
             toolkits=connected,
             tool_ids=wanted,
             credential_revision=credential_revision,
-            runtime_revision=runtime.revision,
+            runtime_revision=runtime.cache_key,
         )
 
     async def _discard(self, user_id: UUID) -> None:

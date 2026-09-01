@@ -1,6 +1,9 @@
 services:
   postgres:
-    image: postgres:16-alpine
+    # pgvector rather than stock postgres: the campus knowledge corpus is an
+    # embedding table, and the `vector` extension is not in the official image.
+    # Migration 0007 creates the extension; it cannot create the binary.
+    image: pgvector/pgvector:pg16
     restart: unless-stopped
     environment:
       POSTGRES_USER: devrimo

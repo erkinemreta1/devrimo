@@ -136,6 +136,11 @@ class AgentRuntimeSettings(Base):
     # properties these feed directly.
     input_token_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     output_token_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Campus knowledge knobs live on this row rather than one of their own so
+    # that a single ``revision`` still invalidates every resident agent: the
+    # corpus is attached at Agent construction time, exactly like the model is.
+    knowledge_enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    knowledge_max_results: Mapped[int | None] = mapped_column(Integer, nullable=True)
     revision: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     updated_by: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
@@ -210,6 +215,11 @@ class UserProfile(Base):
 
     display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     department: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # "undergraduate" | "graduate" | "english_prep". Scopes campus knowledge
+    # retrieval: much of the academic calendar applies to one of these and not
+    # the others, and answering "when is Add-Drop" without it means reciting
+    # every variant back at the student.
+    degree_level: Mapped[str | None] = mapped_column(String(32), nullable=True)
     locale: Mapped[str] = mapped_column(String(8), default="tr", nullable=False)
 
     # The step the student would land on if they reloaded mid-flow. Free-form
@@ -294,3 +304,178 @@ class AgentToolAudit(Base):
     duration_ms: Mapped[int] = mapped_column(Integer, nullable=False)
     error_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class CampusSource(Base):
+    """One configured origin of public campus content.
+
+    This table is the reason the knowledge layer is not a pile of scrapers. A
+    source is *data*: an adapter slug plus the configuration that adapter needs.
+    Adding ``ie.metu.edu.tr`` — Drupal 7, ``/en/announcement/{slug}`` singular,
+    listed at ``/en/tum-duyurular`` — is a row rather than a deploy, which
+    matters because METU's units do not share one site shape. The Drupal 10
+    "miys" theme covers oidb, yurtlar, spormd, kim, ceng, math and psy; it does
+    not cover everything, and assuming otherwise silently loses departments.
+
+    Nothing here is secret: every field describes a public URL or how to parse
+    one. That is what lets the whole table be admin-editable and audit-logged
+    rather than held in deployment environment.
+    """
+
+    __tablename__ = "campus_sources"
+    __table_args__ = (
+        Index("ix_campus_sources_enabled_next", "enabled", "next_run_at"),
+        CheckConstraint("refresh_seconds >= 60", name="ck_campus_sources_refresh_floor"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    slug: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    # Which parser runs. Resolved against ``app.campus.sources.adapters`` at
+    # ingest time; an unknown value fails that one source with a recorded error
+    # rather than raising into the loop.
+    adapter: Mapped[str] = mapped_column(String(32), nullable=False)
+    # What the resulting documents are, for retrieval filtering and for the
+    # citation the persona is required to produce.
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    base_url: Mapped[str] = mapped_column(String(500), nullable=False)
+    # Adapter-specific: listing paths, link patterns, table shape, per-language
+    # URLs. Deliberately opaque here — the adapter owns its own schema.
+    config: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+
+    # Declared charset is honoured first; this overrides it. catalog.metu.edu.tr
+    # serves ISO-8859-9, and decoding that as UTF-8 mangles every Turkish word.
+    encoding: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    languages: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+
+    # Audience scoping. Empty means university-wide, which is the common case:
+    # Add-Drop applies to everyone, a CENG announcement does not.
+    departments: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    degree_levels: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    # ``{"lisansüstü": "degree_level:graduate"}``. The academic calendar carries
+    # its audience in prose rather than in a column, so tagging rows on ingest
+    # is the only way to answer "when is Add-Drop *for me*" instead of reciting
+    # all 155 rows back at the student.
+    audience_rules: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+
+    refresh_seconds: Mapped[int] = mapped_column(Integer, default=21_600, nullable=False)
+    max_pages: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
+    max_items: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
+    priority: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
+
+    next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    # Bumped on every edit, on the same reasoning as
+    # ``AgentRuntimeSettings.revision``: cached views compare against it.
+    revision: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class CampusSourceRun(Base):
+    """One ingest attempt, kept so a source that stopped parsing is visible.
+
+    A scraper that silently returns zero items looks exactly like a quiet week
+    on the site it scrapes. These rows separate the two, and they are what the
+    admin UI shows instead of asking an operator to read logs.
+    """
+
+    __tablename__ = "campus_source_runs"
+    __table_args__ = (Index("ix_campus_source_runs_source_started", "source_id", "started_at"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    source_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("campus_sources.id", ondelete="CASCADE"), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    items_seen: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    items_written: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    items_unchanged: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    requests_made: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    bytes_fetched: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class CampusCuratedEntry(Base):
+    """Campus knowledge that exists in no crawlable place.
+
+    Course WhatsApp groups are the clearest case: admins add these by hand and
+    no amount of crawling produces them. Club registrations and hand-entered
+    events land here too, and they reach the student through the same retrieval
+    path as a crawled announcement — so the agent has one way to answer a
+    campus question, not two.
+    """
+
+    __tablename__ = "campus_curated_entries"
+    __table_args__ = (
+        Index("ix_campus_curated_kind_key", "kind", "entry_key"),
+        CheckConstraint(
+            "kind IN ('whatsapp_group', 'club', 'event', 'note')",
+            name="ck_campus_curated_kind",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    # The handle a student would ask by: a course code for a WhatsApp group, a
+    # club slug for a club. Course codes are normalised upper-case by the API.
+    entry_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    body: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    language: Mapped[str] = mapped_column(String(8), default="tr", nullable=False)
+
+    departments: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    degree_levels: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    tags: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+
+    # A stale WhatsApp invite is worse than no answer, so entries carry a
+    # validity window and expired ones stop being retrievable.
+    valid_from: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    valid_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class CampusGradePolicy(Base):
+    """The university's grading rules, as data an admin can correct.
+
+    METU's letter-to-point scale, whether an average weights METU credits or
+    ECTS, and whether a retake replaces or averages are all set by regulation.
+    Compiling them in would make a regulation change a deploy, and would make a
+    wrong answer to "what is the maximum GPA I can reach" a code bug rather
+    than a settings fix.
+    """
+
+    __tablename__ = "campus_grade_policies"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default="default")
+    # ``{"AA": 4.0, "BA": 3.5, ...}``
+    scale: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    # Grades carrying neither points nor credits: withdrawn, exempt, in progress.
+    non_graded: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    # "credit" (METU credit) or "ects".
+    weight_basis: Mapped[str] = mapped_column(String(16), default="credit", nullable=False)
+    # Whether a repeated course replaces the earlier attempt in the average.
+    retake_replaces: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    max_credits_per_semester: Mapped[int] = mapped_column(Integer, default=40, nullable=False)
+    passing_grades: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    revision: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )

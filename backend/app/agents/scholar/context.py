@@ -28,6 +28,10 @@ async def build_run_dependencies(db: AsyncSession, user_id, resident: ResidentAg
     return {
         "display_name": profile.display_name if profile else None,
         "department": profile.department if profile else None,
+        # Read by the campus knowledge retriever to scope results, which is why
+        # it is here rather than only in the prompt: a graduate student asking
+        # when Add-Drop is should not be shown the English-preparatory rows.
+        "degree_level": profile.degree_level if profile else None,
         "locale": profile.locale if profile else "tr",
         "enabled_tools": list(resident.tool_ids),
         "local_datetime": now.strftime("%Y-%m-%d %H:%M (%A)"),

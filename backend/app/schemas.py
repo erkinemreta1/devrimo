@@ -217,6 +217,7 @@ class ProfileOut(BaseModel):
     user_id: str
     display_name: str | None = None
     department: str | None = None
+    degree_level: str | None = None
     locale: str = "tr"
     onboarding_step: str | None = None
     onboarding_completed: bool = False
@@ -228,6 +229,7 @@ class ProfileOut(BaseModel):
             user_id=str(profile.user_id),
             display_name=profile.display_name,
             department=profile.department,
+            degree_level=profile.degree_level,
             locale=profile.locale,
             onboarding_step=profile.onboarding_step,
             onboarding_completed=profile.onboarding_completed,
@@ -240,6 +242,7 @@ class ProfileIn(BaseModel):
 
     display_name: str | None = Field(default=None, max_length=255)
     department: str | None = Field(default=None, max_length=255)
+    degree_level: str | None = Field(default=None, max_length=32)
     locale: str | None = None
     onboarding_step: str | None = Field(default=None, max_length=64)
     onboarding_completed: bool | None = None
@@ -250,3 +253,17 @@ class ProfileIn(BaseModel):
         if value is None:
             return None
         return value if value in ("tr", "en") else "tr"
+
+    @field_validator("degree_level")
+    @classmethod
+    def _known_degree_level(cls, value: str | None) -> str | None:
+        """Unknown values become ``None`` rather than 422.
+
+        This field only narrows campus retrieval, so a client sending something
+        unexpected should fall back to seeing everything — not have its whole
+        profile PATCH rejected.
+        """
+        if value is None:
+            return None
+        normalized = value.strip().lower()
+        return normalized if normalized in ("undergraduate", "graduate", "english_prep") else None

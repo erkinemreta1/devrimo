@@ -10,6 +10,7 @@ import {
   ChevronRightIcon,
   ClipboardListIcon,
   GaugeIcon,
+  LibraryBigIcon,
   MenuIcon,
   ShieldCheckIcon,
   SlidersHorizontalIcon,
@@ -42,6 +43,7 @@ import {
   RuntimePanel,
   SystemPanel,
 } from "@/components/admin/panels/settings-panels";
+import { KnowledgePanel } from "@/components/admin/panels/knowledge-panels";
 
 export type AdminSection =
   | "overview"
@@ -50,6 +52,7 @@ export type AdminSection =
   | "integrations"
   | "audit"
   | "access"
+  | "knowledge"
   | "runtime"
   | "system";
 
@@ -68,6 +71,7 @@ const NAV: NavItem[] = [
   { id: "agents", label: { tr: "Ajanlar", en: "Agents" }, description: { tr: "Yerleşik ajanlar ve korumalı işlemler.", en: "Resident agents and guarded operations." }, icon: BotIcon, permission: "agents:read", group: "operate" },
   { id: "integrations", label: { tr: "Entegrasyonlar", en: "Integrations" }, description: { tr: "METU araçlarının benimsenmesi ve doğrulanması.", en: "METU tool adoption and verification." }, icon: Building2Icon, permission: "integrations:read", group: "operate" },
   { id: "audit", label: { tr: "Denetim kaydı", en: "Audit log" }, description: { tr: "İçeriksiz yönetici işlemleri ve sonuçları.", en: "Content-free admin operations and results." }, icon: ClipboardListIcon, permission: "audit:read", group: "operate" },
+  { id: "knowledge", label: { tr: "Kampüs bilgisi", en: "Campus knowledge" }, description: { tr: "Kaynaklar, elle girilen kayıtlar ve bilgi tabanı sağlığı.", en: "Sources, curated entries, and knowledge base health." }, icon: LibraryBigIcon, permission: "sources:read", group: "configure" },
   { id: "access", label: { tr: "Yönetici erişimi", en: "Admin access" }, description: { tr: "Yönetici üyelikleri ve rol atamaları.", en: "Admin memberships and role assignments." }, icon: UserCogIcon, permission: "memberships:manage", group: "configure" },
   { id: "runtime", label: { tr: "Ajan varsayılanları", en: "Agent defaults" }, description: { tr: "Model ve güvenli davranış varsayılanları.", en: "Model and safe-behavior defaults." }, icon: SlidersHorizontalIcon, permission: "runtime:read", group: "configure" },
   { id: "system", label: { tr: "Sistem", en: "System" }, description: { tr: "Broker, veri kaynakları ve çalışma zamanı havuzu.", en: "Broker, data sources, and runtime pool." }, icon: ActivityIcon, permission: "system:read", group: "configure" },
@@ -223,6 +227,7 @@ function AdminPanel({ section, principal, title, description }: { section: Admin
     case "integrations": return <IntegrationsPanel title={title} description={description} />;
     case "audit": return <AuditPanel principal={principal} title={title} description={description} />;
     case "access": return <AccessPanel principal={principal} title={title} description={description} />;
+    case "knowledge": return <KnowledgePanel title={title} description={description} />;
     case "runtime": return <RuntimePanel title={title} description={description} />;
     case "system": return <SystemPanel principal={principal} title={title} description={description} />;
   }
