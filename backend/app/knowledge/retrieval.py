@@ -2,6 +2,7 @@ import math
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from uuid import UUID
 
 from sqlalchemy import and_, func, literal_column, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -57,11 +58,20 @@ def _serialize(record: CampusKnowledgeRecord, source: CampusSource, score: float
 
 
 async def search_knowledge(
-    db: AsyncSession, query: str, filters: SearchFilters | None = None, *, limit: int = 10
+    db: AsyncSession,
+    query: str,
+    filters: SearchFilters | None = None,
+    *,
+    organization_id: UUID,
+    limit: int = 10,
 ) -> list[dict]:
     filters = filters or SearchFilters()
     now = datetime.now(UTC)
-    conditions = [CampusKnowledgeRecord.is_current.is_(True), CampusSource.status == "published"]
+    conditions = [
+        CampusKnowledgeRecord.is_current.is_(True),
+        CampusSource.organization_id == organization_id,
+        CampusSource.status == "published",
+    ]
     if filters.record_types:
         conditions.append(CampusKnowledgeRecord.record_type.in_(filters.record_types))
     if filters.language:
@@ -127,12 +137,17 @@ async def search_knowledge(
     return [_serialize(record, source, score) for score, record, source in ranked[:limit]]
 
 
-async def read_campus_page(db: AsyncSession, url: str) -> dict | None:
+async def read_campus_page(db: AsyncSession, url: str, *, organization_id: UUID) -> dict | None:
     row = (
         await db.execute(
             select(CampusKnowledgeRecord, CampusSource)
             .join(CampusSource, CampusSource.id == CampusKnowledgeRecord.source_id)
-            .where(CampusKnowledgeRecord.url == url, CampusKnowledgeRecord.is_current.is_(True))
+            .where(
+                CampusKnowledgeRecord.url == url,
+                CampusKnowledgeRecord.is_current.is_(True),
+                CampusSource.organization_id == organization_id,
+                CampusSource.status == "published",
+            )
             .order_by(CampusKnowledgeRecord.last_seen_at.desc())
             .limit(1)
         )

@@ -5,6 +5,7 @@ from uuid import UUID
 
 from agno.tools.decorator import tool
 
+from app.admin.directory import active_account
 from app.db.session import SessionLocal
 from app.knowledge.retrieval import SearchFilters, search_knowledge
 from app.knowledge.retrieval import read_campus_page as read_indexed_page
@@ -27,6 +28,9 @@ def build_platform_tools(user_id: UUID, connected: list) -> list:
     ) -> list[dict]:
         """Search indexed campus facts with verified student-audience filters and citations."""
         async with SessionLocal() as db:
+            account = await active_account(db, user_id)
+            if account is None:
+                return []
             context = await student_service.get_context(db, user_id)
             return await search_knowledge(
                 db,
@@ -39,6 +43,7 @@ def build_platform_tools(user_id: UUID, connected: list) -> list:
                     starts_after=datetime.fromisoformat(starts_after) if starts_after else None,
                     starts_before=datetime.fromisoformat(starts_before) if starts_before else None,
                 ),
+                organization_id=account.organization_id,
                 limit=max(1, min(limit, 25)),
             )
 
@@ -46,7 +51,8 @@ def build_platform_tools(user_id: UUID, connected: list) -> list:
     async def read_campus_page(url: str) -> dict:
         """Read one already-approved, indexed campus page by its canonical URL."""
         async with SessionLocal() as db:
-            result = await read_indexed_page(db, url)
+            account = await active_account(db, user_id)
+            result = await read_indexed_page(db, url, organization_id=account.organization_id) if account else None
             return result or {"status": "not_indexed", "url": url}
 
     @tool(name="plan_semester")

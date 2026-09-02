@@ -60,9 +60,14 @@ def _prerequisite_met(rule: Any, completed: dict[str, str], cgpa: float) -> tupl
         required = str(rule.get("min_grade", "DD"))
         return (grade is not None and _grade_at_least(grade, required), f"requires {code} with {required} or better")
     if "min_cgpa" in rule:
-        required = float(rule["min_cgpa"])
+        try:
+            required = float(rule["min_cgpa"])
+        except (TypeError, ValueError):
+            return False, "invalid prerequisite rule"
         return (cgpa >= required, f"requires CGPA {required:.2f}")
     if "all" in rule:
+        if not isinstance(rule["all"], list):
+            return False, "invalid prerequisite rule"
         failures = []
         for child in rule["all"]:
             met, reason = _prerequisite_met(child, completed, cgpa)
@@ -70,6 +75,8 @@ def _prerequisite_met(rule: Any, completed: dict[str, str], cgpa: float) -> tupl
                 failures.append(reason or "unmet prerequisite")
         return (not failures, "; ".join(failures) if failures else None)
     if "any" in rule:
+        if not isinstance(rule["any"], list):
+            return False, "invalid prerequisite rule"
         reasons = []
         for child in rule["any"]:
             met, reason = _prerequisite_met(child, completed, cgpa)
@@ -77,7 +84,7 @@ def _prerequisite_met(rule: Any, completed: dict[str, str], cgpa: float) -> tupl
                 return True, None
             reasons.append(reason or "unmet prerequisite")
         return False, "one of: " + ", ".join(reasons)
-    return True, None
+    return False, "invalid or unsupported prerequisite rule"
 
 
 def _minutes(value: str | None, fallback: int) -> int:

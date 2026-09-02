@@ -8,16 +8,21 @@ from app.config import get_settings
 from app.db.models import (
     CampusIngestionJob,
     CampusKnowledgeRecord,
+    CampusSource,
+    CampusSourceRevision,
     CourseOffering,
     CourseRule,
+    Organization,
     StudentAcademicSnapshot,
+    UserMailFact,
 )
 from app.db.session import SessionLocal
 from app.knowledge.adapters import adapter_for
 from app.knowledge.fetcher import FetchPolicy, FetchRejected, fetch_document
 from app.knowledge.ingestion import claim_job, process_job
+from app.knowledge.retrieval import read_campus_page, search_knowledge
 from app.knowledge.types import FetchedDocument
-from app.planning.service import upsert_academic_snapshot
+from app.planning.service import _prerequisite_met, upsert_academic_snapshot
 from tests.conftest import auth_header, new_user_id
 
 
@@ -50,6 +55,15 @@ async def test_fetcher_rejects_private_network_destinations():
             "http://127.0.0.1/internal",
             FetchPolicy(allowed_hosts=frozenset({"127.0.0.1"}), respect_robots=False),
         )
+
+
+def test_unknown_or_malformed_prerequisite_rules_fail_closed():
+    assert _prerequisite_met({"faculty_approval": True}, {}, 3.0) == (
+        False,
+        "invalid or unsupported prerequisite rule",
+    )
+    assert _prerequisite_met({"all": "CENG111"}, {}, 3.0) == (False, "invalid prerequisite rule")
+    assert _prerequisite_met({"min_cgpa": "not-a-number"}, {}, 3.0) == (False, "invalid prerequisite rule")
 
 
 async def test_source_publish_ingest_search_and_personalized_updates(client, monkeypatch):
@@ -120,6 +134,115 @@ async def test_source_publish_ingest_search_and_personalized_updates(client, mon
     assert updates.status_code == 200, updates.text
     assert updates.json()["items"][0]["title"] == "Add-Drop Week"
     assert updates.json()["personalized_by"]["degree_level"] == "undergraduate"
+
+    enabled = await client.patch(
+        "/api/v1/profile",
+        headers=auth_header(student_id),
+        json={"mail_facts_enabled": True},
+    )
+    assert enabled.status_code == 200, enabled.text
+    async with SessionLocal() as db:
+        db.add(
+            UserMailFact(
+                user_id=student_id,
+                external_id="mail-event-1",
+                fact_type="event",
+                title="Cinema club screening",
+                summary="A structured event extracted while email facts were enabled.",
+                sender_domain="metu.edu.tr",
+                message_digest="a" * 64,
+            )
+        )
+        await db.commit()
+    with_mail = await client.get("/api/v1/student/updates", headers=auth_header(student_id))
+    assert any(item["origin"] == "mail_fact" for item in with_mail.json()["items"])
+
+    disabled = await client.patch(
+        "/api/v1/profile",
+        headers=auth_header(student_id),
+        json={"mail_facts_enabled": False},
+    )
+    assert disabled.status_code == 200, disabled.text
+    without_mail = await client.get("/api/v1/student/updates", headers=auth_header(student_id))
+    assert all(item["origin"] != "mail_fact" for item in without_mail.json()["items"])
+
+
+async def test_knowledge_retrieval_is_scoped_to_organization():
+    first_org = Organization(id=uuid4(), slug="first-campus", name="First Campus")
+    second_org = Organization(id=uuid4(), slug="second-campus", name="Second Campus")
+    first_source = CampusSource(
+        id=uuid4(),
+        organization_id=first_org.id,
+        name="First announcements",
+        kind="curated",
+        status="published",
+        enabled=True,
+    )
+    second_source = CampusSource(
+        id=uuid4(),
+        organization_id=second_org.id,
+        name="Second announcements",
+        kind="curated",
+        status="published",
+        enabled=True,
+    )
+    first_revision = CampusSourceRevision(
+        id=uuid4(),
+        source_id=first_source.id,
+        revision=1,
+        status="published",
+        config={},
+        validation={"ok": True},
+    )
+    second_revision = CampusSourceRevision(
+        id=uuid4(),
+        source_id=second_source.id,
+        revision=1,
+        status="published",
+        config={},
+        validation={"ok": True},
+    )
+    shared_url = "https://example.edu/shared-announcement"
+    first_record = CampusKnowledgeRecord(
+        source_id=first_source.id,
+        source_revision_id=first_revision.id,
+        external_id="first-record",
+        record_type="announcement",
+        title="Tenant boundary first",
+        content="Only the first organization may retrieve this tenant boundary record.",
+        url=shared_url,
+        content_hash="1" * 64,
+    )
+    second_record = CampusKnowledgeRecord(
+        source_id=second_source.id,
+        source_revision_id=second_revision.id,
+        external_id="second-record",
+        record_type="announcement",
+        title="Tenant boundary second",
+        content="Only the second organization may retrieve this tenant boundary record.",
+        url=shared_url,
+        content_hash="2" * 64,
+    )
+    async with SessionLocal() as db:
+        db.add_all(
+            [
+                first_org,
+                second_org,
+                first_source,
+                second_source,
+                first_revision,
+                second_revision,
+                first_record,
+                second_record,
+            ]
+        )
+        await db.commit()
+
+        first_results = await search_knowledge(db, "tenant boundary", organization_id=first_org.id)
+        assert [item["source"] for item in first_results] == ["First announcements"]
+        first_page = await read_campus_page(db, shared_url, organization_id=first_org.id)
+        assert first_page is not None
+        assert first_page["source"] == "First announcements"
 
 
 async def test_planner_owns_inputs_and_protected_group_checks_enrollment(client, monkeypatch):
