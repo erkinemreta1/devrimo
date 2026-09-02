@@ -71,6 +71,7 @@ async def search_knowledge(
         CampusKnowledgeRecord.is_current.is_(True),
         CampusSource.organization_id == organization_id,
         CampusSource.status == "published",
+        CampusSource.enabled.is_(True),
     ]
     if filters.record_types:
         conditions.append(CampusKnowledgeRecord.record_type.in_(filters.record_types))
@@ -100,7 +101,7 @@ async def search_knowledge(
     if not filters.include_expired:
         conditions.append(or_(CampusKnowledgeRecord.valid_until.is_(None), CampusKnowledgeRecord.valid_until >= now))
 
-    query_embedding = await embed_query(query) if query.strip() else None
+    query_embedding = await embed_query(db, organization_id, query) if query.strip() else None
     base = select(CampusKnowledgeRecord, CampusSource).join(
         CampusSource, CampusSource.id == CampusKnowledgeRecord.source_id
     )
@@ -147,6 +148,7 @@ async def read_campus_page(db: AsyncSession, url: str, *, organization_id: UUID)
                 CampusKnowledgeRecord.is_current.is_(True),
                 CampusSource.organization_id == organization_id,
                 CampusSource.status == "published",
+                CampusSource.enabled.is_(True),
             )
             .order_by(CampusKnowledgeRecord.last_seen_at.desc())
             .limit(1)

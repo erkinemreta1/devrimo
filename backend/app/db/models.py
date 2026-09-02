@@ -357,11 +357,47 @@ class CampusSourceRevision(Base):
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class KnowledgeEmbeddingSettings(Base):
+    """Per-organization embedding provider configuration.
+
+    API keys are encrypted and the fixed storage width remains 1536. Providers
+    with smaller vectors are zero-padded by the embedding service, preserving
+    cosine similarity without making the pgvector index provider-specific.
+    """
+
+    __tablename__ = "knowledge_embedding_settings"
+    __table_args__ = (
+        CheckConstraint("provider IN ('disabled', 'local', 'remote')", name="ck_embedding_settings_provider"),
+        CheckConstraint("dimensions BETWEEN 1 AND 1536", name="ck_embedding_settings_dimensions"),
+        CheckConstraint("batch_size BETWEEN 1 AND 128", name="ck_embedding_settings_batch_size"),
+    )
+
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), primary_key=True
+    )
+    provider: Mapped[str] = mapped_column(String(16), default="disabled", nullable=False)
+    model: Mapped[str] = mapped_column(Text, default="text-embedding-3-small", nullable=False)
+    base_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    dimensions: Mapped[int] = mapped_column(Integer, default=1536, nullable=False)
+    batch_size: Mapped[int] = mapped_column(Integer, default=32, nullable=False)
+    api_key_enc: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
 class CampusIngestionJob(Base):
     __tablename__ = "campus_ingestion_jobs"
     __table_args__ = (
         CheckConstraint(
             "status IN ('queued', 'leased', 'completed', 'failed', 'dead')", name="ck_ingestion_jobs_status"
+        ),
+        CheckConstraint("kind IN ('ingest', 'reembed')", name="ck_ingestion_jobs_kind"),
+        CheckConstraint(
+            "phase IN ('queued', 'fetching', 'parsing', 'embedding', 'storing', 'completed', 'failed')",
+            name="ck_ingestion_jobs_phase",
         ),
         Index("ix_ingestion_jobs_claim", "status", "available_at", "created_at"),
         Index("ix_ingestion_jobs_source_created", "source_id", "created_at"),
@@ -372,9 +408,16 @@ class CampusIngestionJob(Base):
     revision_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("campus_source_revisions.id", ondelete="CASCADE"), nullable=False
     )
+    kind: Mapped[str] = mapped_column(String(16), default="ingest", nullable=False)
     status: Mapped[str] = mapped_column(String(16), default="queued", nullable=False)
+    phase: Mapped[str] = mapped_column(String(16), default="queued", nullable=False)
     attempt: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     max_attempts: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
+    total_records: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    processed_records: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    embedded_records: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    embedding_provider: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    embedding_model: Mapped[str | None] = mapped_column(Text, nullable=True)
     available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     leased_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     lease_owner: Mapped[str | None] = mapped_column(String(128), nullable=True)
@@ -383,6 +426,9 @@ class CampusIngestionJob(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    progress_updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
 
 
 class CampusKnowledgeRecord(Base):
@@ -550,17 +596,14 @@ class PlanningPolicy(Base):
 class CourseGroupLink(Base):
     __tablename__ = "course_group_links"
     __table_args__ = (
-        UniqueConstraint(
-            "organization_id", "term", "course_code", "section", name="uq_course_group_links_course_section"
-        ),
-        Index("ix_course_group_links_lookup", "term", "course_code", "section", "active"),
+        UniqueConstraint("organization_id", "course_code", "section", name="uq_course_group_links_course_section"),
+        Index("ix_course_group_links_lookup", "organization_id", "course_code", "section", "active"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organizations.id"), nullable=False)
-    term: Mapped[str] = mapped_column(String(32), nullable=False)
     course_code: Mapped[str] = mapped_column(String(32), nullable=False)
-    section: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    section: Mapped[str] = mapped_column(String(16), default="", nullable=False)
     invite_url_enc: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     eligibility: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)

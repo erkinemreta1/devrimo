@@ -145,9 +145,43 @@ export type SourceRevision = {
 
 export type KnowledgeSourceDetail = KnowledgeSource & { revision_history: SourceRevision[] };
 
+export type EmbeddingSettings = {
+  provider: "disabled" | "local" | "remote";
+  model: string;
+  base_url: string | null;
+  dimensions: number;
+  batch_size: number;
+  has_api_key: boolean;
+  has_database_override: boolean;
+  model_label: string | null;
+  total_records: number;
+  embedded_records: number;
+  current_model_records: number;
+  active_jobs: number;
+};
+
+export type IngestionJob = {
+  id: string;
+  source_id: string;
+  source_name: string;
+  kind: "ingest" | "reembed";
+  status: string;
+  phase: string;
+  attempt: number;
+  total_records: number;
+  processed_records: number;
+  embedded_records: number;
+  embedding_provider: string | null;
+  embedding_model: string | null;
+  error_code: string | null;
+  error_detail: string | null;
+  created_at: string;
+  completed_at: string | null;
+  progress_updated_at: string;
+};
+
 export type CourseGroup = {
   id: string;
-  term: string;
   course_code: string;
   section: string | null;
   eligibility: Record<string, unknown>;

@@ -12,6 +12,7 @@ from app.db.models import (
     CampusSourceRevision,
     CourseOffering,
     CourseRule,
+    KnowledgeEmbeddingSettings,
     Organization,
     StudentAcademicSnapshot,
     UserMailFact,
@@ -166,6 +167,94 @@ async def test_source_publish_ingest_search_and_personalized_updates(client, mon
     without_mail = await client.get("/api/v1/student/updates", headers=auth_header(student_id))
     assert all(item["origin"] != "mail_fact" for item in without_mail.json()["items"])
 
+    bulk = await client.put(
+        "/api/v1/admin/sources/bulk",
+        headers=auth_header(admin_id),
+        json={
+            "source_ids": [source_id],
+            "changes": {"authority": 85, "schedule_seconds": 7200, "language": "tr"},
+        },
+    )
+    assert bulk.status_code == 200, bulk.text
+    assert bulk.json()["updated"] == 1
+    sources = await client.get("/api/v1/admin/sources", headers=auth_header(admin_id))
+    assert sources.json()["items"][0]["authority"] == 85
+    assert sources.json()["items"][0]["schedule_seconds"] == 7200
+
+    missing_key = await client.put(
+        "/api/v1/admin/embedding-settings",
+        headers=auth_header(admin_id),
+        json={
+            "provider": "remote",
+            "model": "remote-test",
+            "base_url": "https://embedding.example/v1",
+            "dimensions": 3,
+            "batch_size": 2,
+        },
+    )
+    assert missing_key.status_code == 422
+    remote = await client.put(
+        "/api/v1/admin/embedding-settings",
+        headers=auth_header(admin_id),
+        json={
+            "provider": "remote",
+            "model": "remote-test",
+            "base_url": "https://embedding.example/v1",
+            "dimensions": 3,
+            "batch_size": 2,
+            "api_key": "remote-secret-key",
+        },
+    )
+    assert remote.status_code == 200, remote.text
+    assert remote.json()["has_api_key"] is True
+    assert "remote-secret-key" not in remote.text
+    async with SessionLocal() as db:
+        stored_remote = (await db.execute(select(KnowledgeEmbeddingSettings))).scalar_one()
+        assert stored_remote.api_key_enc is not None
+        assert b"remote-secret-key" not in stored_remote.api_key_enc
+
+    local = await client.put(
+        "/api/v1/admin/embedding-settings",
+        headers=auth_header(admin_id),
+        json={
+            "provider": "local",
+            "model": "local-test",
+            "base_url": "http://embedding:11434/v1",
+            "dimensions": 3,
+            "batch_size": 2,
+        },
+    )
+    assert local.status_code == 200, local.text
+    assert local.json()["provider"] == "local"
+    assert local.json()["has_api_key"] is False
+
+    async def fake_embeddings(config, texts):
+        assert config.provider == "local"
+        return [[1.0, 0.5, 0.25] for _ in texts]
+
+    monkeypatch.setattr("app.knowledge.embeddings._request_embeddings", fake_embeddings)
+    reindex = await client.post("/api/v1/admin/embedding/reindex", headers=auth_header(admin_id))
+    assert reindex.status_code == 202, reindex.text
+    assert reindex.json()["queued"] == 1
+    async with SessionLocal() as db:
+        job = await claim_job(db, "embedding-worker")
+        assert job is not None and job.kind == "reembed"
+        assert await process_job(db, job) == 1
+        record = (await db.execute(select(CampusKnowledgeRecord))).scalar_one()
+        assert record.embedding is not None and len(record.embedding) == 1536
+        assert record.embedding[:3] == [1.0, 0.5, 0.25]
+        assert record.embedding_model == "local:local-test:3"
+        stored_settings = (await db.execute(select(KnowledgeEmbeddingSettings))).scalar_one()
+        assert stored_settings.api_key_enc is None  # Switching to local removes the remote secret.
+    embedding_status = await client.get("/api/v1/admin/embedding-settings", headers=auth_header(admin_id))
+    assert embedding_status.json()["current_model_records"] == 1
+    jobs = await client.get("/api/v1/admin/ingestion-jobs", headers=auth_header(admin_id))
+    embedding_job = jobs.json()["items"][0]
+    assert embedding_job["kind"] == "reembed"
+    assert embedding_job["phase"] == "completed"
+    assert embedding_job["processed_records"] == 1
+    assert embedding_job["embedded_records"] == 1
+
 
 async def test_knowledge_retrieval_is_scoped_to_organization():
     first_org = Organization(id=uuid4(), slug="first-campus", name="First Campus")
@@ -313,7 +402,6 @@ async def test_planner_owns_inputs_and_protected_group_checks_enrollment(client,
         "/api/v1/admin/course-groups",
         headers=auth_header(admin_id),
         json={
-            "term": term,
             "course_code": "CENG213",
             "section": "1",
             "invite_url": "https://chat.whatsapp.com/test-invite",
@@ -321,6 +409,9 @@ async def test_planner_owns_inputs_and_protected_group_checks_enrollment(client,
         },
     )
     assert group.status_code == 201, group.text
+    assert "term" not in group.json()
+    listed_groups = await client.get("/api/v1/admin/course-groups", headers=auth_header(admin_id))
+    assert "term" not in listed_groups.json()["items"][0]
     resolved = await client.post(
         "/api/v1/student/course-group",
         headers=auth_header(student_id),
@@ -345,3 +436,5 @@ async def test_private_records_are_not_embedding_candidates():
     assert "embedding" not in CourseRule.__table__.columns
     assert "embedding" in CampusKnowledgeRecord.__table__.columns
     assert "status" in CampusIngestionJob.__table__.columns
+    assert "phase" in CampusIngestionJob.__table__.columns
+    assert "provider" in KnowledgeEmbeddingSettings.__table__.columns

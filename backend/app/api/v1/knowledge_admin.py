@@ -1,10 +1,11 @@
 from datetime import UTC, datetime
 from typing import Any, Literal
+from urllib.parse import urlparse
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import func, select
+from pydantic import BaseModel, Field, field_validator, model_validator
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.admin.audit import record_event
@@ -19,10 +20,12 @@ from app.db.models import (
     CourseGroupLink,
     CourseOffering,
     CourseRule,
+    KnowledgeEmbeddingSettings,
     PlanningPolicy,
 )
 from app.db.session import get_db
 from app.knowledge import registry
+from app.knowledge.embeddings import get_embedding_config
 from app.knowledge.templates import DEFAULT_SOURCE_TEMPLATES
 
 router = APIRouter()
@@ -81,6 +84,47 @@ class RevisionIn(BaseModel):
         return _reject_secret_config(value)
 
 
+class SourceBulkChanges(BaseModel):
+    enabled: bool | None = None
+    language: Literal["tr", "en"] | None = None
+    authority: int | None = Field(default=None, ge=0, le=100)
+    schedule_seconds: int | None = Field(default=None, ge=300, le=2_592_000)
+
+
+class SourceBulkUpdateIn(BaseModel):
+    source_ids: list[UUID] = Field(min_length=1, max_length=200)
+    changes: SourceBulkChanges
+
+    @model_validator(mode="after")
+    def has_changes(self) -> "SourceBulkUpdateIn":
+        if not self.changes.model_dump(exclude_none=True):
+            raise ValueError("At least one source field must be changed")
+        if len(set(self.source_ids)) != len(self.source_ids):
+            raise ValueError("Source IDs must be unique")
+        return self
+
+
+class EmbeddingSettingsIn(BaseModel):
+    provider: Literal["disabled", "local", "remote"]
+    model: str = Field(min_length=1, max_length=300)
+    base_url: str | None = Field(default=None, max_length=2000)
+    dimensions: int = Field(default=1536, ge=1, le=1536)
+    batch_size: int = Field(default=32, ge=1, le=128)
+    api_key: str | None = Field(default=None, max_length=4000)
+    clear_api_key: bool = False
+
+    @model_validator(mode="after")
+    def valid_endpoint(self) -> "EmbeddingSettingsIn":
+        if self.provider == "disabled":
+            return self
+        parsed = urlparse(self.base_url or "")
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise ValueError("An HTTP(S) embedding endpoint is required")
+        if self.provider == "remote" and parsed.scheme != "https":
+            raise ValueError("Remote embedding endpoints must use HTTPS")
+        return self
+
+
 class PolicyIn(BaseModel):
     name: str = Field(min_length=2, max_length=200)
     rules: dict[str, Any]
@@ -114,7 +158,6 @@ class AcademicCatalogIn(BaseModel):
 
 
 class GroupIn(BaseModel):
-    term: str = Field(min_length=3, max_length=32)
     course_code: str = Field(min_length=2, max_length=32)
     section: str | None = Field(default=None, max_length=16)
     invite_url: str = Field(min_length=10, max_length=2000)
@@ -237,6 +280,44 @@ async def create_source(
         after={"source_id": str(source.id), "kind": source.kind, "revision": revision.revision},
     )
     return {**_source_out(source), "revision": revision.revision, "validation": revision.validation}
+
+
+@router.put("/sources/bulk")
+async def bulk_update_sources(
+    body: SourceBulkUpdateIn,
+    principal: AdminPrincipal = Depends(require(AdminPermission.knowledge_write)),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    sources = (
+        await db.execute(
+            select(CampusSource).where(
+                CampusSource.organization_id == _org(principal),
+                CampusSource.id.in_(body.source_ids),
+            )
+        )
+    ).scalars().all()
+    if len(sources) != len(body.source_ids):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "One or more sources were not found")
+    changes = body.changes.model_dump(exclude_none=True)
+    for source in sources:
+        for field, value in changes.items():
+            setattr(source, field, value)
+    if "authority" in changes:
+        await db.execute(
+            update(CampusKnowledgeRecord)
+            .where(CampusKnowledgeRecord.source_id.in_(body.source_ids))
+            .values(authority=changes["authority"])
+        )
+    await db.commit()
+    await record_event(
+        db,
+        actor_user_id=principal.user.id,
+        organization_id=_org(principal),
+        action="knowledge_source.bulk_update",
+        result="success",
+        after={"source_ids": [str(item.id) for item in sources], "changes": changes},
+    )
+    return {"updated": len(sources), "items": [_source_out(item) for item in sources]}
 
 
 @router.get("/sources/{source_id}")
@@ -375,6 +456,161 @@ async def enqueue_ingestion(
     return {"job_id": str(job.id), "status": job.status}
 
 
+async def _embedding_out(db: AsyncSession, organization_id: UUID) -> dict:
+    config = await get_embedding_config(db, organization_id)
+    record_scope = (
+        select(func.count(CampusKnowledgeRecord.id))
+        .select_from(CampusKnowledgeRecord)
+        .join(CampusSource, CampusSource.id == CampusKnowledgeRecord.source_id)
+        .where(
+            CampusSource.organization_id == organization_id,
+            CampusSource.status == "published",
+            CampusSource.enabled.is_(True),
+            CampusKnowledgeRecord.is_current.is_(True),
+        )
+    )
+    total_records = int(await db.scalar(record_scope) or 0)
+    embedded_records = int(
+        await db.scalar(record_scope.where(CampusKnowledgeRecord.embedding.is_not(None))) or 0
+    )
+    current_model_records = (
+        int(
+            await db.scalar(
+                record_scope.where(CampusKnowledgeRecord.embedding_model == config.model_label)
+            )
+            or 0
+        )
+        if config.enabled
+        else 0
+    )
+    active_jobs = int(
+        await db.scalar(
+            select(func.count(CampusIngestionJob.id))
+            .select_from(CampusIngestionJob)
+            .join(CampusSource, CampusSource.id == CampusIngestionJob.source_id)
+            .where(
+                CampusSource.organization_id == organization_id,
+                CampusIngestionJob.status.in_(["queued", "leased", "failed"]),
+            )
+        )
+        or 0
+    )
+    return {
+        "provider": config.provider,
+        "model": config.model,
+        "base_url": config.base_url,
+        "dimensions": config.dimensions,
+        "batch_size": config.batch_size,
+        "has_api_key": bool(config.api_key),
+        "has_database_override": config.database_override,
+        "model_label": config.model_label if config.enabled else None,
+        "total_records": total_records,
+        "embedded_records": embedded_records,
+        "current_model_records": current_model_records,
+        "active_jobs": active_jobs,
+    }
+
+
+@router.get("/embedding-settings")
+async def embedding_settings(
+    principal: AdminPrincipal = Depends(require(AdminPermission.knowledge_read)),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    return await _embedding_out(db, _org(principal))
+
+
+@router.put("/embedding-settings")
+async def update_embedding_settings(
+    body: EmbeddingSettingsIn,
+    principal: AdminPrincipal = Depends(require(AdminPermission.knowledge_write)),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    organization_id = _org(principal)
+    row = await db.get(KnowledgeEmbeddingSettings, organization_id)
+    if row is None:
+        row = KnowledgeEmbeddingSettings(organization_id=organization_id)
+        db.add(row)
+
+    supplied_key = body.api_key.strip() if body.api_key else None
+    retained_key = row.api_key_enc if not body.clear_api_key else None
+    if body.provider == "remote" and not (supplied_key or retained_key):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Remote embedding requires an API key")
+
+    row.provider = body.provider
+    row.model = body.model.strip()
+    row.base_url = body.base_url.strip().rstrip("/") if body.base_url and body.provider != "disabled" else None
+    row.dimensions = body.dimensions
+    row.batch_size = body.batch_size
+    row.updated_by = principal.user.id
+    if supplied_key:
+        row.api_key_enc = encrypt_secret(supplied_key)
+    elif body.provider != "remote" or body.clear_api_key:
+        row.api_key_enc = None
+    await db.commit()
+    await record_event(
+        db,
+        actor_user_id=principal.user.id,
+        organization_id=organization_id,
+        action="knowledge_embedding.configure",
+        result="success",
+        after={
+            "provider": row.provider,
+            "model": row.model,
+            "base_url": row.base_url,
+            "dimensions": row.dimensions,
+            "batch_size": row.batch_size,
+        },
+    )
+    return await _embedding_out(db, organization_id)
+
+
+@router.post("/embedding/reindex", status_code=status.HTTP_202_ACCEPTED)
+async def reindex_embeddings(
+    principal: AdminPrincipal = Depends(require(AdminPermission.knowledge_write)),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    organization_id = _org(principal)
+    config = await get_embedding_config(db, organization_id)
+    if not config.enabled:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Enable a local or remote embedding provider first")
+    sources = (
+        await db.execute(
+            select(CampusSource).where(
+                CampusSource.organization_id == organization_id,
+                CampusSource.status == "published",
+                CampusSource.enabled.is_(True),
+                CampusSource.active_revision_id.is_not(None),
+            )
+        )
+    ).scalars().all()
+    queued = []
+    for source in sources:
+        active = await db.scalar(
+            select(CampusIngestionJob.id).where(
+                CampusIngestionJob.source_id == source.id,
+                CampusIngestionJob.status.in_(["queued", "leased", "failed"]),
+            )
+        )
+        if active is None:
+            job = CampusIngestionJob(
+                source_id=source.id,
+                revision_id=source.active_revision_id,
+                kind="reembed",
+            )
+            db.add(job)
+            queued.append(job)
+    await db.commit()
+    await record_event(
+        db,
+        actor_user_id=principal.user.id,
+        organization_id=organization_id,
+        action="knowledge_embedding.reindex",
+        result="success",
+        after={"queued": len(queued), "provider": config.provider, "model": config.model},
+    )
+    return {"queued": len(queued), "job_ids": [str(item.id) for item in queued]}
+
+
 @router.get("/ingestion-jobs")
 async def ingestion_jobs(
     limit: int = Query(default=50, ge=1, le=200),
@@ -396,12 +632,20 @@ async def ingestion_jobs(
                 "id": str(job.id),
                 "source_id": str(job.source_id),
                 "source_name": name,
+                "kind": job.kind,
                 "status": job.status,
+                "phase": job.phase,
                 "attempt": job.attempt,
+                "total_records": job.total_records,
+                "processed_records": job.processed_records,
+                "embedded_records": job.embedded_records,
+                "embedding_provider": job.embedding_provider,
+                "embedding_model": job.embedding_model,
                 "error_code": job.error_code,
                 "error_detail": job.error_detail,
                 "created_at": job.created_at,
                 "completed_at": job.completed_at,
+                "progress_updated_at": job.progress_updated_at,
             }
             for job, name in rows
         ]
@@ -515,16 +759,15 @@ async def list_groups(
         await db.execute(
             select(CourseGroupLink)
             .where(CourseGroupLink.organization_id == _org(principal))
-            .order_by(CourseGroupLink.term.desc(), CourseGroupLink.course_code)
+            .order_by(CourseGroupLink.course_code, CourseGroupLink.section)
         )
     ).scalars()
     return {
         "items": [
             {
                 "id": str(item.id),
-                "term": item.term,
                 "course_code": item.course_code,
-                "section": item.section,
+                "section": item.section or None,
                 "eligibility": item.eligibility,
                 "active": item.active,
                 "valid_until": item.valid_until,
@@ -543,9 +786,8 @@ async def create_group(
 ) -> dict:
     group = CourseGroupLink(
         organization_id=_org(principal),
-        term=body.term,
         course_code="".join(body.course_code.upper().split()),
-        section=body.section,
+        section=body.section or "",
         invite_url_enc=encrypt_secret(body.invite_url),
         eligibility=body.eligibility,
         valid_until=body.valid_until,
@@ -560,6 +802,6 @@ async def create_group(
         organization_id=_org(principal),
         action="course_group.create",
         result="success",
-        after={"group_id": str(group.id), "term": group.term, "course_code": group.course_code},
+        after={"group_id": str(group.id), "course_code": group.course_code},
     )
-    return {"id": str(group.id), "term": group.term, "course_code": group.course_code, "section": group.section}
+    return {"id": str(group.id), "course_code": group.course_code, "section": group.section or None}

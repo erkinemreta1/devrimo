@@ -4,6 +4,7 @@ from uuid import UUID
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.admin.directory import active_account
 from app.core.crypto import decrypt_secret
 from app.db.models import (
     CourseGroupAccessAudit,
@@ -21,14 +22,17 @@ async def get_course_group(
     db: AsyncSession, user_id: UUID, *, term: str, course_code: str, section: str | None = None
 ) -> dict:
     now = datetime.now(UTC)
+    account = await active_account(db, user_id)
+    if account is None:
+        return {"status": "not_found", "detail": "No active group has been curated for this course."}
     statement = select(CourseGroupLink).where(
-        CourseGroupLink.term == term,
+        CourseGroupLink.organization_id == account.organization_id,
         CourseGroupLink.course_code == _code(course_code),
         CourseGroupLink.active.is_(True),
         or_(CourseGroupLink.valid_until.is_(None), CourseGroupLink.valid_until >= now),
     )
     if section:
-        statement = statement.where(or_(CourseGroupLink.section.is_(None), CourseGroupLink.section == section))
+        statement = statement.where(or_(CourseGroupLink.section == "", CourseGroupLink.section == section))
     links = (await db.execute(statement.order_by(CourseGroupLink.section.desc()))).scalars().all()
     if not links:
         return {"status": "not_found", "detail": "No active group has been curated for this course."}
@@ -42,7 +46,7 @@ async def get_course_group(
                 for item in enrolled
                 if isinstance(item, dict)
                 and _code(str(item.get("course_code", ""))) == link.course_code
-                and (link.section is None or str(item.get("section", "")) == link.section)
+                and (not link.section or str(item.get("section", "")) == link.section)
             ),
             None,
         )
@@ -68,8 +72,8 @@ async def get_course_group(
         return {
             "status": "ok",
             "course_code": link.course_code,
-            "section": link.section,
-            "term": link.term,
+            "section": link.section or None,
+            "term": term,
             "invite_url": decrypt_secret(link.invite_url_enc),
             "verified_against_snapshot_at": snapshot.fetched_at.isoformat(),
         }

@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.db.models import CampusIngestionJob, CampusKnowledgeRecord, CampusSource, CampusSourceRevision
 from app.knowledge.adapters import adapter_for
-from app.knowledge.embeddings import embed_texts
+from app.knowledge.embeddings import EmbeddingConfig, embed_texts, get_embedding_config
 from app.knowledge.fetcher import FetchPolicy, fetch_document
 from app.knowledge.registry import REMOTE_KINDS
 from app.knowledge.types import ParsedRecord
@@ -86,6 +86,7 @@ async def claim_job(db: AsyncSession, worker_id: str) -> CampusIngestionJob | No
         return None
     settings = get_settings()
     job.status = "leased"
+    job.phase = "queued"
     job.attempt += 1
     job.lease_owner = worker_id
     job.leased_until = now + timedelta(seconds=settings.knowledge_worker_lease_seconds)
@@ -93,6 +94,45 @@ async def claim_job(db: AsyncSession, worker_id: str) -> CampusIngestionJob | No
     await db.commit()
     await db.refresh(job)
     return job
+
+
+async def _set_progress(db: AsyncSession, job: CampusIngestionJob, phase: str, **changes: object) -> None:
+    job.phase = phase
+    job.progress_updated_at = datetime.now(UTC)
+    for field, value in changes.items():
+        setattr(job, field, value)
+    await db.commit()
+
+
+async def _embed_batches(
+    db: AsyncSession,
+    job: CampusIngestionJob,
+    source: CampusSource,
+    texts: list[str],
+) -> tuple[list[list[float] | None], EmbeddingConfig]:
+    config = await get_embedding_config(db, source.organization_id)
+    job.embedding_provider = config.provider
+    job.embedding_model = config.model_label if config.enabled else None
+    job.total_records = len(texts)
+    job.processed_records = 0
+    job.embedded_records = 0
+    await _set_progress(db, job, "embedding")
+    if not texts:
+        return [], config
+    if not config.enabled:
+        job.processed_records = len(texts)
+        await _set_progress(db, job, "embedding")
+        return [None for _ in texts], config
+
+    result: list[list[float] | None] = []
+    for offset in range(0, len(texts), config.batch_size):
+        batch = texts[offset : offset + config.batch_size]
+        vectors = await embed_texts(db, source.organization_id, batch, config=config)
+        result.extend(vectors)
+        job.processed_records += len(batch)
+        job.embedded_records += sum(vector is not None for vector in vectors)
+        await _set_progress(db, job, "embedding")
+    return result, config
 
 
 async def _load_records(source: CampusSource, revision: CampusSourceRevision) -> tuple[list[ParsedRecord] | None, dict]:
@@ -132,19 +172,49 @@ async def process_job(db: AsyncSession, job: CampusIngestionJob) -> int:
     revision = await db.get(CampusSourceRevision, job.revision_id)
     if source is None or revision is None or source.active_revision_id != revision.id:
         raise ValueError("Job points to a missing or inactive source revision")
+    if job.kind == "reembed":
+        rows = (
+            await db.execute(
+                select(CampusKnowledgeRecord).where(
+                    CampusKnowledgeRecord.source_id == source.id,
+                    CampusKnowledgeRecord.is_current.is_(True),
+                )
+            )
+        ).scalars().all()
+        texts = [f"{row.title}\n{row.summary or ''}\n{row.content}"[:12000] for row in rows]
+        embeddings, config = await _embed_batches(db, job, source, texts)
+        await _set_progress(db, job, "storing")
+        for row, embedding in zip(rows, embeddings, strict=True):
+            row.embedding = embedding
+            row.embedding_model = config.model_label if embedding is not None else None
+        now = datetime.now(UTC)
+        job.status = "completed"
+        job.phase = "completed"
+        job.completed_at = now
+        job.progress_updated_at = now
+        job.error_code = None
+        job.error_detail = None
+        await db.commit()
+        return len(rows)
+
+    await _set_progress(db, job, "fetching" if source.kind in REMOTE_KINDS else "parsing")
     records, headers = await _load_records(source, revision)
-    now = datetime.now(UTC)
     if records is None:
+        now = datetime.now(UTC)
         source.last_fetched_at = now
         source.last_success_at = now
         source.last_error = None
         job.status = "completed"
+        job.phase = "completed"
         job.completed_at = now
+        job.progress_updated_at = now
         await db.commit()
         return 0
 
     texts = [f"{record.title}\n{record.summary or ''}\n{record.content}"[:12000] for record in records]
-    embeddings = await embed_texts(texts)
+    embeddings, config = await _embed_batches(db, job, source, texts)
+    await _set_progress(db, job, "storing")
+    now = datetime.now(UTC)
     existing = {
         row.external_id: row
         for row in (
@@ -185,9 +255,8 @@ async def process_job(db: AsyncSession, job: CampusIngestionJob) -> int:
         row.authority = source.authority
         row.content_hash = content_hash
         row.metadata_json = record.metadata
-        if embedding is not None:
-            row.embedding = embedding
-            row.embedding_model = get_settings().knowledge_embedding_model
+        row.embedding = embedding
+        row.embedding_model = config.model_label if embedding is not None else None
         row.is_current = True
         row.last_seen_at = now
         row.removed_at = None
@@ -201,7 +270,9 @@ async def process_job(db: AsyncSession, job: CampusIngestionJob) -> int:
     source.last_success_at = now
     source.last_error = None
     job.status = "completed"
+    job.phase = "completed"
     job.completed_at = now
+    job.progress_updated_at = now
     job.error_code = None
     job.error_detail = None
     await db.commit()
@@ -217,6 +288,8 @@ async def fail_job(db: AsyncSession, job_id, exc: Exception) -> None:
     now = datetime.now(UTC)
     dead = job.attempt >= job.max_attempts
     job.status = "dead" if dead else "failed"
+    job.phase = "failed"
+    job.progress_updated_at = now
     job.available_at = now + timedelta(seconds=min(3600, 2 ** max(job.attempt, 1) * 30))
     job.error_code = type(exc).__name__[:128]
     job.error_detail = str(exc)[:2000]
