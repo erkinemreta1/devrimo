@@ -117,7 +117,7 @@ class Settings(BaseSettings):
 
     @property
     def posthog_configured(self) -> bool:
-        return bool(self.posthog_enabled and self.posthog_api_key)
+        return bool(self.posthog_enabled and self.posthog_api_key.strip())
 
     @property
     def agentos_cors_origin_list(self) -> list[str]:

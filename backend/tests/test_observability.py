@@ -35,6 +35,14 @@ def test_client_is_none_without_a_key(unconfigured):
     assert ph_client.get_posthog() is None
 
 
+def test_client_is_none_with_a_whitespace_only_key(monkeypatch, unconfigured):
+    monkeypatch.setenv("POSTHOG_API_KEY", "   ")
+    get_settings.cache_clear()
+
+    assert not get_settings().posthog_configured
+    assert ph_client.get_posthog() is None
+
+
 def test_capture_helpers_are_silent_no_ops(unconfigured):
     # No exception, no network, no output.
     ph_client.capture("some_event", distinct_id="user-1", value=1)

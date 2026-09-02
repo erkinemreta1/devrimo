@@ -41,6 +41,18 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
     networks:
       - devrimo-internal
     volumes:
@@ -74,7 +86,7 @@ services:
       postgres:
         condition: service_healthy
       broker:
-        condition: service_started
+        condition: service_healthy
     networks:
       - devrimo-internal
     security_opt:
@@ -97,6 +109,8 @@ services:
       - "127.0.0.1:7777:7777"
     depends_on:
       postgres:
+        condition: service_healthy
+      broker:
         condition: service_healthy
     networks:
       - devrimo-internal

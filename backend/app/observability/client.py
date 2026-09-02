@@ -151,14 +151,14 @@ def get_posthog() -> Posthog | None:
         return None
 
     client = Posthog(
-        settings.posthog_api_key,
+        settings.posthog_api_key.strip(),
         host=settings.posthog_host,
         debug=settings.posthog_debug,
         # Local evaluation keeps feature-flag checks off the network on the
         # chat hot path. Without a personal key the SDK falls back to the
         # decide endpoint, which still works, just slower.
-        personal_api_key=settings.posthog_personal_api_key or None,
-        enable_local_evaluation=bool(settings.posthog_personal_api_key),
+        personal_api_key=settings.posthog_personal_api_key.strip() or None,
+        enable_local_evaluation=bool(settings.posthog_personal_api_key.strip()),
         super_properties={
             "service": "devrimo-broker",
             "agent_profile": settings.agent_profile,

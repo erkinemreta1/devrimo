@@ -32,13 +32,20 @@ export async function getAuth() {
 
   const {
     data: { session },
+    error: sessionError,
   } = await supabase.auth.getSession();
 
-  if (!session?.user || session.user.id !== claims.sub) return null;
+  // getClaims() verifies identity. getSession() is used only for the raw
+  // access token that the Next.js proxy forwards to the broker; its cookie-
+  // sourced user object must not be trusted or accessed on the server.
+  if (sessionError || !session?.access_token) return null;
 
   return {
     supabase,
-    user: session.user,
+    user: {
+      id: claims.sub,
+      email: typeof claims.email === "string" ? claims.email : undefined,
+    },
     accessToken: session.access_token,
   };
 }
