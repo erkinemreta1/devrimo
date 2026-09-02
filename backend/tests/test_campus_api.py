@@ -12,6 +12,7 @@ from app.agents.pool import get_pool
 from app.api.v1 import campus as campus_routes
 from app.campus import service as campus_service
 from app.campus.verify import VerificationResult
+from app.config import get_settings
 from app.db.models import CampusCredential
 from app.db.session import SessionLocal
 from tests.conftest import auth_header, new_user_id
@@ -286,3 +287,95 @@ async def test_a_change_made_while_stopped_is_applied_on_restart(client, accept_
 
     after = await client.get("/api/v1/campus/connection", headers=headers)
     assert after.json()["needs_restart"] is False
+
+
+# --- Academic context sync on connect ---------------------------------------
+# Connecting SAIS used to verify the credentials and stop there. The only code
+# that filled the student's academic context ran inside a turn, when the model
+# called a planning tool, so the profile page stayed empty until the student
+# happened to ask a planning question.
+
+
+@pytest.fixture
+def record_context_sync(monkeypatch):
+    synced: list = []
+
+    async def _sync(user_id):
+        synced.append(user_id)
+        return True
+
+    monkeypatch.setattr(campus_routes, "sync_student_context_from_sais", _sync)
+    return synced
+
+
+async def test_a_verified_connection_syncs_the_academic_context(client, accept_credentials, record_context_sync):
+    user_id = new_user_id()
+    response = await client.put(
+        "/api/v1/campus/connection",
+        headers=auth_header(user_id),
+        json={"metu_username": "e123456", "metu_password": "hunter2", "enabled_tools": ["sais"]},
+    )
+
+    assert response.status_code == 200
+    assert record_context_sync == [user_id]
+
+
+async def test_an_unverified_connection_does_not_reach_for_sais(client, monkeypatch, record_context_sync):
+    """Unverified credentials would only spawn campus servers that cannot sign in."""
+
+    async def _down(username: str, password: str, timeout: float = 20.0) -> VerificationResult:
+        return VerificationResult(ok=False, unreachable=True, detail="Could not reach METU sign-in right now.")
+
+    monkeypatch.setattr(campus_routes, "verify_metu_credentials", _down)
+
+    user_id = new_user_id()
+    response = await client.put(
+        "/api/v1/campus/connection",
+        headers=auth_header(user_id),
+        json={"metu_username": "e123456", "metu_password": "hunter2"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["verified_at"] is None
+    assert record_context_sync == []
+
+
+async def test_a_failing_context_sync_does_not_lose_the_connection(client, accept_credentials, monkeypatch):
+    """SAIS being unreadable is not a reason to reject credentials METU accepted."""
+
+    async def _boom(user_id):
+        raise RuntimeError("SAIS is unreachable")
+
+    monkeypatch.setattr(campus_routes, "sync_student_context_from_sais", _boom)
+
+    user_id = new_user_id()
+    response = await client.put(
+        "/api/v1/campus/connection",
+        headers=auth_header(user_id),
+        json={"metu_username": "e123456", "metu_password": "hunter2"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["connected"] is True
+
+    async with SessionLocal() as db:
+        stored = (
+            await db.execute(select(CampusCredential).where(CampusCredential.user_id == user_id))
+        ).scalar_one_or_none()
+    assert stored is not None
+
+
+async def test_the_context_sync_can_be_switched_off(client, accept_credentials, record_context_sync, monkeypatch):
+    monkeypatch.setenv("CAMPUS_CONTEXT_SYNC_ON_CONNECT", "false")
+    get_settings.cache_clear()
+
+    user_id = new_user_id()
+    response = await client.put(
+        "/api/v1/campus/connection",
+        headers=auth_header(user_id),
+        json={"metu_username": "e123456", "metu_password": "hunter2"},
+    )
+
+    assert response.status_code == 200
+    assert record_context_sync == []
+    get_settings.cache_clear()

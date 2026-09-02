@@ -438,3 +438,108 @@ async def test_private_records_are_not_embedding_candidates():
     assert "status" in CampusIngestionJob.__table__.columns
     assert "phase" in CampusIngestionJob.__table__.columns
     assert "provider" in KnowledgeEmbeddingSettings.__table__.columns
+
+
+# --- Off-turn SAIS context read ---------------------------------------------
+
+
+class _FakeFunction:
+    """One MCP function, shaped the way ``_payload`` unwraps a result."""
+
+    def __init__(self, payload):
+        self._payload = payload
+
+    async def entrypoint(self):
+        return self._payload
+
+
+class _FakeToolkit:
+    def __init__(self, functions):
+        self.functions = functions
+
+
+def _fake_campus_session(monkeypatch, functions):
+    from contextlib import asynccontextmanager
+
+    from app.planning import mcp_bridge
+
+    @asynccontextmanager
+    async def _session(user_id):
+        yield [_FakeToolkit(functions)]
+
+    monkeypatch.setattr(mcp_bridge, "_campus_session", _session)
+    return mcp_bridge
+
+
+async def test_sais_context_sync_stores_a_verified_but_unconfirmed_context(client, monkeypatch):
+    """Turkish and English field names both map onto the typed context.
+
+    The student still has to confirm it: a value read from SAIS is verified,
+    which is not the same as agreed to.
+    """
+    from app.student import service as student_service
+
+    user_id = new_user_id()
+    bridge = _fake_campus_session(
+        monkeypatch,
+        {
+            "sais_get_student_info": _FakeFunction(
+                {
+                    "bolum": "Computer Engineering",
+                    "degree_level": "undergraduate",
+                    "program": "571",
+                    "yerleske": "Ankara",
+                }
+            )
+        },
+    )
+
+    assert await bridge.sync_student_context_from_sais(user_id) is True
+
+    async with SessionLocal() as db:
+        context = await student_service.get_context(db, user_id)
+    assert context.department == "Computer Engineering"
+    assert context.degree_level == "undergraduate"
+    assert context.program_code == "571"
+    assert context.campus == "Ankara"
+    assert context.source == "sais"
+    assert context.verified_at is not None
+    assert context.confirmed_at is None
+
+
+async def test_sais_context_sync_reports_failure_when_the_tool_is_absent(client, monkeypatch):
+    """A student without the SAIS tool enabled is a no-op, not an error."""
+    user_id = new_user_id()
+    bridge = _fake_campus_session(monkeypatch, {})
+
+    assert await bridge.sync_student_context_from_sais(user_id) is False
+
+
+async def test_sais_context_sync_never_reads_the_transcript(client, monkeypatch):
+    """Scope guard: this path has no term, and the profile never shows grades."""
+    called: list[str] = []
+
+    class _Recording(_FakeFunction):
+        def __init__(self, name, payload):
+            super().__init__(payload)
+            self._name = name
+
+        async def entrypoint(self):
+            called.append(self._name)
+            return await super().entrypoint()
+
+    user_id = new_user_id()
+    bridge = _fake_campus_session(
+        monkeypatch,
+        {
+            "sais_get_student_info": _Recording("sais_get_student_info", {"department": "Physics"}),
+            "sais_get_transcript": _Recording("sais_get_transcript", {"cgpa": "3.9"}),
+        },
+    )
+
+    assert await bridge.sync_student_context_from_sais(user_id) is True
+    assert called == ["sais_get_student_info"]
+
+    async with SessionLocal() as db:
+        snapshots = (await db.execute(select(StudentAcademicSnapshot))).scalars().all()
+    assert [s for s in snapshots if s.user_id == user_id] == []

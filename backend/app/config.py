@@ -79,6 +79,11 @@ class Settings(BaseSettings):
     # their CWD (odtuclass) get a private directory beneath this.
     campus_state_root: str = "/var/lib/devrimo/campus"
     campus_mcp_timeout_seconds: int = 30
+    # Read the student's academic context from SAIS as part of saving a verified
+    # campus connection, so their profile is populated before their first turn.
+    # Costs one campus server spawn inside that request; turn it off to keep the
+    # save fast and leave the context to the planner's in-turn refresh.
+    campus_context_sync_on_connect: bool = True
 
     # --- Shared campus knowledge ------------------------------------------
     knowledge_worker_poll_seconds: int = 15

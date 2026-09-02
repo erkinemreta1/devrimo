@@ -15,10 +15,12 @@ from app.auth.jwt import AuthenticatedUser
 from app.campus import service as campus_service
 from app.campus.credentials import secrets_for
 from app.campus.verify import normalize_username, verify_metu_credentials
+from app.config import get_settings
 from app.db.models import AgentStatus
 from app.db.session import get_db
 from app.logging import get_logger
 from app.observability import capture_exception
+from app.planning.mcp_bridge import sync_student_context_from_sais
 from app.schemas import (
     CampusConnectionIn,
     CampusConnectionOut,
@@ -104,6 +106,7 @@ async def put_connection(
     )
 
     await _reconfigure_agent_if_running(db, user.id)
+    await _sync_student_context(user.id, verified=verified)
     return CampusConnectionOut.from_model(
         credential,
         secrets_for(credential),
@@ -158,4 +161,25 @@ async def _reconfigure_agent_if_running(db: AsyncSession, user_id) -> None:
             exc,
             distinct_id=str(user_id),
             **{"$exception_fingerprint": ["campus_apply_failed"]},
+        )
+
+
+async def _sync_student_context(user_id, *, verified: bool) -> None:
+    """Best-effort read of the academic context SAIS already knows.
+
+    Only worth attempting on a verified connection: unverified credentials
+    would just spawn campus servers that cannot sign in. Like the rebuild
+    above, a failure here is not a failure of the save — the student can still
+    fill the context in by hand, and the planner refreshes it in-turn anyway.
+    """
+    if not verified or not get_settings().campus_context_sync_on_connect:
+        return
+    try:
+        await sync_student_context_from_sais(user_id)
+    except Exception as exc:
+        logger.warning("student_context_sync_failed", user_id=str(user_id), error=str(exc))
+        capture_exception(
+            exc,
+            distinct_id=str(user_id),
+            **{"$exception_fingerprint": ["student_context_sync_failed"]},
         )

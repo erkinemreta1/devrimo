@@ -6,15 +6,23 @@ and persists only the typed private snapshot used by deterministic code.
 """
 
 import json
-from collections.abc import Iterable
+from collections.abc import AsyncIterator, Iterable
+from contextlib import asynccontextmanager
 from typing import Any
 from uuid import UUID
 
 from agno.tools.mcp import MCPTools
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agents.toolset import build_toolkits, close_toolkits, connect_toolkits
+from app.campus import service as campus_service
+from app.config import get_settings
 from app.db.session import SessionLocal
+from app.logging import get_logger
 from app.planning.service import upsert_academic_snapshot
 from app.student.service import apply_verified_context
+
+logger = get_logger(__name__)
 
 
 def _function(toolkits: Iterable[MCPTools], name: str):
@@ -135,12 +143,60 @@ async def refresh_from_sais(user_id: UUID, term: str, connected: list[MCPTools])
             source="sais",
         )
         if student_info is not None:
-            await apply_verified_context(
-                db,
-                user_id,
-                department=str(_find_value(student_info, {"department", "bolum"}) or "") or None,
-                degree_level=str(_find_value(student_info, {"degree_level", "level", "program_level"}) or "") or None,
-                program_code=str(_find_value(student_info, {"program_code", "program"}) or "") or None,
-                campus=str(_find_value(student_info, {"campus", "yerleske"}) or "") or None,
-            )
+            await _apply_student_info(db, user_id, student_info)
+    return True
+
+
+async def _apply_student_info(db: AsyncSession, user_id: UUID, student_info: Any) -> None:
+    await apply_verified_context(
+        db,
+        user_id,
+        department=str(_find_value(student_info, {"department", "bolum"}) or "") or None,
+        degree_level=str(_find_value(student_info, {"degree_level", "level", "program_level"}) or "") or None,
+        program_code=str(_find_value(student_info, {"program_code", "program"}) or "") or None,
+        campus=str(_find_value(student_info, {"campus", "yerleske"}) or "") or None,
+    )
+
+
+@asynccontextmanager
+async def _campus_session(user_id: UUID) -> AsyncIterator[list[MCPTools]]:
+    """Connect this student's campus servers for one read outside a turn.
+
+    The pool owns the long-lived connections, but it only builds them for a
+    chat turn. This is the short-lived equivalent for a request that has to
+    read SAIS without one: it spawns the servers, yields them, and always
+    closes them, because a leaked subprocess holds the student's credentials
+    in memory.
+    """
+    settings = get_settings()
+    async with SessionLocal() as db:
+        specs = await campus_service.campus_server_specs(db, user_id)
+    connected = await connect_toolkits(build_toolkits(specs, timeout_seconds=settings.campus_mcp_timeout_seconds))
+    try:
+        yield connected
+    finally:
+        await close_toolkits(connected)
+
+
+async def sync_student_context_from_sais(user_id: UUID) -> bool:
+    """Fill the student's verified academic context right after they connect.
+
+    :func:`refresh_from_sais` only runs inside a turn, when the model calls a
+    planning tool, so a student who connected SAIS and opened their profile saw
+    an empty academic context until they happened to ask a planning question.
+
+    Reads ``sais_get_student_info`` alone — department, degree level, program
+    code, campus, which is exactly what the profile shows. The transcript is
+    deliberately not read here: it needs a term this path has no way to choose,
+    and it is private data the profile never displays. The stored context is
+    marked verified but unconfirmed, so the student still confirms it before
+    anything uses it.
+    """
+    async with _campus_session(user_id) as connected:
+        student_info = await _payload(_function(connected, "sais_get_student_info"))
+        if student_info is None:
+            return False
+        async with SessionLocal() as db:
+            await _apply_student_info(db, user_id, student_info)
+    logger.info("student_context_synced", user_id=str(user_id))
     return True
