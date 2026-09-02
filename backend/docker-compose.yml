@@ -139,7 +139,19 @@ networks:
     # FORWARD chain for this bridge. That is deployment configuration, not a
     # promise this file can keep — see "Egress" in README.md for what it is
     # worth and what it does not cover.
-    name: devrimo-internal
+    #
+    # The name is scoped to the Compose project by default, because a fixed
+    # name is actively unsafe with more than one stack on a host. Two stacks
+    # sharing a bridge both register the `postgres` alias, so the name resolves
+    # to two addresses and each new connection lands on whichever database DNS
+    # returns — the pool ends up holding connections to both at once. That
+    # reads and writes a student's rows across two databases and surfaces as
+    # intermittent 500s rather than as a connection error.
+    #
+    # Set DEVRIMO_NETWORK_NAME to pin a stable bridge name where a host
+    # firewall rule has to reference it, which is the one case that wants a
+    # fixed name. Only pin it where a single stack owns the host.
+    name: ${DEVRIMO_NETWORK_NAME:-devrimo-${COMPOSE_PROJECT_NAME}-internal}
     driver: bridge
 
 volumes:

@@ -151,9 +151,14 @@ HTTP proxy cannot filter this traffic:
 Filtering this mix means L4, and the broker cannot do it to itself: `nftables`
 needs `NET_ADMIN`, which hands back the privilege that dropping the Docker
 socket removed. It belongs on the host — an nftables rule on the FORWARD chain
-for the `devrimo-internal` bridge, allowing METU hosts and the model endpoint.
-Worth doing as defence in depth; deployment configuration, not something this
-repo can ship.
+for the internal bridge, allowing METU hosts and the model endpoint. Worth doing
+as defence in depth; deployment configuration, not something this repo can ship.
+
+That bridge is named per Compose project by default (`devrimo-<project>-internal`),
+so that several stacks on one host — one per git worktree, say — cannot both
+claim the `postgres` service alias and leave the name resolving to two
+databases. A rule that has to reference a fixed name should pin it with
+`DEVRIMO_NETWORK_NAME`, and only on a host where a single stack runs.
 
 Be clear about what it would buy, though. The worst exfiltration path is *inside*
 any such allowlist: webmail can send mail as the student, to anywhere, and mail
