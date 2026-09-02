@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Any
 from uuid import UUID
 
 import httpx
@@ -77,10 +78,38 @@ async def _request_embeddings(config: EmbeddingConfig, texts: Sequence[str]) -> 
         )
         response.raise_for_status()
         payload = response.json()
-    indexed = {int(item["index"]): item["embedding"] for item in payload.get("data", [])}
-    if len(indexed) != len(texts):
+    return _response_vectors(payload, len(texts))
+
+
+def _response_vectors(payload: Any, expected_count: int) -> list[list[float]]:
+    """Normalize OpenAI-compatible indexed and ordered embedding responses.
+
+    OpenAI includes an ``index`` in every data item. Gemini's compatible
+    endpoint preserves input order but omits that field. Accept both contracts,
+    while rejecting mixed or incomplete batches rather than pairing a vector
+    with the wrong source text.
+    """
+    rows = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(rows, list) or len(rows) != expected_count:
         raise ValueError("Embedding provider returned an incomplete batch")
-    return [indexed[index] for index in range(len(texts))]
+    if not all(isinstance(item, dict) and isinstance(item.get("embedding"), list) for item in rows):
+        raise ValueError("Embedding provider returned a malformed batch")
+
+    indexed_rows = ["index" in item for item in rows]
+    if any(indexed_rows) and not all(indexed_rows):
+        raise ValueError("Embedding provider returned inconsistent indexes")
+    if not any(indexed_rows):
+        return [item["embedding"] for item in rows]
+
+    indexed: dict[int, list[float]] = {}
+    for item in rows:
+        index = item["index"]
+        if not isinstance(index, int) or isinstance(index, bool) or index in indexed:
+            raise ValueError("Embedding provider returned invalid indexes")
+        indexed[index] = item["embedding"]
+    if set(indexed) != set(range(expected_count)):
+        raise ValueError("Embedding provider returned incomplete indexes")
+    return [indexed[index] for index in range(expected_count)]
 
 
 def _storage_vector(vector: Sequence[float], expected_dimensions: int) -> list[float]:
