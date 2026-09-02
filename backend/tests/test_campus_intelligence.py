@@ -119,6 +119,22 @@ async def test_source_publish_ingest_search_and_personalized_updates(client, mon
         assert record.embedding is None
         assert record.is_current is True
 
+    debug_search = await client.get(
+        "/api/v1/admin/knowledge/search?q=Add-Drop&limit=5",
+        headers=auth_header(admin_id),
+    )
+    assert debug_search.status_code == 200, debug_search.text
+    assert debug_search.json()["query"] == "Add-Drop"
+    assert debug_search.json()["count"] == 1
+    assert debug_search.json()["items"][0]["title"] == "Add-Drop Week"
+    assert debug_search.json()["items"][0]["score"] > 0
+
+    denied_search = await client.get(
+        "/api/v1/admin/knowledge/search?q=Add-Drop",
+        headers=auth_header(student_id),
+    )
+    assert denied_search.status_code == 403
+
     context = await client.put(
         "/api/v1/student/context",
         headers=auth_header(student_id),

@@ -180,6 +180,32 @@ export type IngestionJob = {
   progress_updated_at: string;
 };
 
+export type KnowledgeSearchResult = {
+  id: string;
+  type: string;
+  title: string;
+  summary: string | null;
+  content: string;
+  url: string | null;
+  language: string | null;
+  starts_at: string | null;
+  ends_at: string | null;
+  published_at: string | null;
+  audience: Record<string, unknown>;
+  source: string;
+  source_id: string;
+  retrieved_at: string;
+  source_last_success_at: string | null;
+  score: number;
+};
+
+export type KnowledgeSearchResponse = {
+  query: string;
+  count: number;
+  embedding_model: string | null;
+  items: KnowledgeSearchResult[];
+};
+
 export type CourseGroup = {
   id: string;
   course_code: string;

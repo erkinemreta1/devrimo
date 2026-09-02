@@ -7,12 +7,14 @@ import {
   CpuIcon,
   DatabaseZapIcon,
   EyeIcon,
+  ExternalLinkIcon,
   LinkIcon,
   ListChecksIcon,
   PlusIcon,
   RefreshCwIcon,
   RocketIcon,
   SaveIcon,
+  SearchIcon,
   XIcon,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -35,6 +37,7 @@ import type {
   CourseGroup,
   EmbeddingSettings,
   IngestionJob,
+  KnowledgeSearchResponse,
   KnowledgeSource,
   KnowledgeSourceDetail,
 } from "@/lib/admin/types";
@@ -101,6 +104,7 @@ export function KnowledgePanel({ principal, title, description }: { principal: A
     />
     <div className="space-y-6">
       <EmbeddingPanel settings={embedding.data} jobs={jobs.data?.items ?? []} loading={embedding.isLoading} canWrite={canWrite} onDone={refresh} />
+      <KnowledgeSearchLab />
 
       <section>
         <div className="mb-3 flex items-end justify-between gap-3">
@@ -133,6 +137,54 @@ export function KnowledgePanel({ principal, title, description }: { principal: A
     <SourceDialog source={selected} onOpenChange={(open) => !open && setSelected(null)} onDone={refresh} />
     <CreateGroupDialog open={addingGroup} onOpenChange={setAddingGroup} onDone={() => { setAddingGroup(false); refresh(); }} />
   </>;
+}
+
+function KnowledgeSearchLab() {
+  const { locale, pick } = useLocale();
+  const [query, setQuery] = useState("");
+  const [limit, setLimit] = useState("10");
+  const search = useMutation({
+    mutationFn: (value: string) => {
+      const params = new URLSearchParams({ q: value, limit });
+      return adminGet<KnowledgeSearchResponse>(`knowledge/search?${params.toString()}`);
+    },
+  });
+  const canSearch = query.trim().length > 0 && !search.isPending;
+
+  return <Card className="surface-raised border-0 ring-1 ring-foreground/8">
+    <CardHeader className="border-b bg-muted/20">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <CardTitle className="flex items-center gap-2"><SearchIcon className="size-4 text-primary" />{pick({ tr: "Arama laboratuvarı", en: "Search lab" })}</CardTitle>
+          <CardDescription className="mt-1">{pick({ tr: "Ajanın kullandığı gerçek hibrit aramayı çalıştır ve sıralanmış eşleşmeleri tek skorla incele.", en: "Run the agent's real hybrid retrieval and inspect ranked matches with one combined score." })}</CardDescription>
+        </div>
+        {search.data?.embedding_model ? <Badge variant="outline">{search.data.embedding_model}</Badge> : null}
+      </div>
+    </CardHeader>
+    <CardContent className="space-y-4">
+      <form className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_8rem_auto]" onSubmit={(event) => { event.preventDefault(); if (canSearch) search.mutate(query.trim()); }}>
+        <div className="space-y-2"><Label htmlFor="knowledge-debug-query">{pick({ tr: "Sorgu", en: "Query" })}</Label><Input id="knowledge-debug-query" value={query} maxLength={500} onChange={(event) => setQuery(event.target.value)} placeholder={pick({ tr: "Örn. akademik takvim kayıt tarihleri", en: "E.g. academic calendar registration dates" })} /></div>
+        <div className="space-y-2"><Label>{pick({ tr: "Sonuç", en: "Results" })}</Label><Select value={limit} onValueChange={(value) => setLimit(value ?? "10")}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{[5, 10, 20, 25].map((value) => <SelectItem key={value} value={String(value)}>{value}</SelectItem>)}</SelectContent></Select></div>
+        <div className="flex items-end"><Button className="w-full sm:w-auto" type="submit" disabled={!canSearch}><SearchIcon />{search.isPending ? pick({ tr: "Aranıyor", en: "Searching" }) : pick({ tr: "Ara", en: "Search" })}</Button></div>
+      </form>
+
+      {search.error ? <div className="rounded-xl border border-destructive/25 bg-destructive/5 p-4 text-sm text-destructive">{search.error.message}</div> : null}
+      {search.isPending ? <div className="space-y-3">{Array.from({ length: 3 }).map((_, index) => <Skeleton key={index} className="h-32 rounded-xl" />)}</div> : search.data ? <div className="space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-muted-foreground"><span><span className="font-semibold text-foreground">{search.data.count}</span> {pick({ tr: "eşleşme", en: "matches" })}</span><span className="truncate">“{search.data.query}”</span></div>
+        {search.data.items.length ? search.data.items.map((item, index) => <div key={item.id} className="rounded-xl border bg-background/55 p-4">
+          <div className="flex items-start gap-4">
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2"><Badge variant="secondary">#{index + 1}</Badge><Badge variant="outline">{item.source}</Badge><Badge variant="outline">{item.type.replaceAll("_", " ")}</Badge>{item.language ? <Badge variant="outline">{item.language}</Badge> : null}</div>
+              <h3 className="mt-2 font-semibold">{item.title}</h3>
+              <p className="mt-1 max-h-24 overflow-hidden whitespace-pre-line text-sm leading-6 text-muted-foreground">{item.summary || item.content}</p>
+              <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">{item.source_last_success_at ? <span>{pick({ tr: "Kaynak güncellendi", en: "Source updated" })}: {formatDate(item.source_last_success_at, locale)}</span> : null}{item.url ? <a href={item.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 font-medium text-primary hover:underline">{pick({ tr: "Kaynağı aç", en: "Open source" })}<ExternalLinkIcon className="size-3" /></a> : null}</div>
+            </div>
+            <div className="shrink-0 rounded-xl border bg-muted/25 px-3 py-2 text-right"><p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">{pick({ tr: "Skor", en: "Score" })}</p><p className="font-mono text-lg font-semibold tabular-nums">{item.score.toFixed(4)}</p></div>
+          </div>
+        </div>) : <EmptyState title={pick({ tr: "Eşleşme bulunamadı", en: "No matches found" })} description={pick({ tr: "Sorguyu değiştir veya kaynakların başarıyla işlendiğini kontrol et.", en: "Try another query or check that sources were ingested successfully." })} icon={<SearchIcon className="size-4" />} />}
+      </div> : <div className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground"><SearchIcon className="mx-auto mb-2 size-5" />{pick({ tr: "İndeksteki eşleşmeleri görmek için bir sorgu çalıştır.", en: "Run a query to inspect matches in the index." })}</div>}
+    </CardContent>
+  </Card>;
 }
 
 function EmbeddingPanel(props: { settings?: EmbeddingSettings; jobs: IngestionJob[]; loading: boolean; canWrite: boolean; onDone: () => void }) {

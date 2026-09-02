@@ -26,6 +26,7 @@ from app.db.models import (
 from app.db.session import get_db
 from app.knowledge import registry
 from app.knowledge.embeddings import get_embedding_config
+from app.knowledge.retrieval import search_knowledge
 from app.knowledge.templates import DEFAULT_SOURCE_TEMPLATES
 
 router = APIRouter()
@@ -517,6 +518,28 @@ async def embedding_settings(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     return await _embedding_out(db, _org(principal))
+
+
+@router.get("/knowledge/search")
+async def debug_knowledge_search(
+    q: str = Query(min_length=1, max_length=500),
+    limit: int = Query(default=10, ge=1, le=25),
+    principal: AdminPrincipal = Depends(require(AdminPermission.knowledge_read)),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Run the same ranked retrieval the agent uses, exposed for admins."""
+    query = q.strip()
+    if not query:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "A non-empty search query is required")
+    organization_id = _org(principal)
+    config = await get_embedding_config(db, organization_id)
+    results = await search_knowledge(db, query, organization_id=organization_id, limit=limit)
+    return {
+        "query": query,
+        "count": len(results),
+        "embedding_model": config.model_label if config.enabled else None,
+        "items": results,
+    }
 
 
 @router.put("/embedding-settings")
