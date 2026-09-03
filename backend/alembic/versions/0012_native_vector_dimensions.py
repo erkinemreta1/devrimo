@@ -48,16 +48,30 @@ def upgrade() -> None:
 
     if op.get_bind().dialect.name == "postgresql":
         # Existing short vectors were zero-padded. Recover their native prefix
-        # so deployments retain indexed data through this migration.
+        # so deployments retain indexed data through this migration when
+        # subvector (added in pgvector 0.7.0) is available. On pgvector < 0.7.0,
+        # clear padded short vectors so they can be re-embedded cleanly at native dimensions.
         op.execute(
-            "UPDATE campus_knowledge_records SET embedding_384 = "
-            "subvector(embedding_1536, 1, 384)::vector(384), embedding_1536 = NULL "
-            "WHERE embedding_1536 IS NOT NULL AND embedding_model ~ '\\:384(\\:[0-9a-f]{8})?$'"
-        )
-        op.execute(
-            "UPDATE campus_knowledge_records SET embedding_768 = "
-            "subvector(embedding_1536, 1, 768)::vector(768), embedding_1536 = NULL "
-            "WHERE embedding_1536 IS NOT NULL AND embedding_model ~ '\\:768(\\:[0-9a-f]{8})?$'"
+            """
+            DO $$
+            BEGIN
+                IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'subvector') THEN
+                    UPDATE campus_knowledge_records SET embedding_384 =
+                        subvector(embedding_1536, 1, 384)::vector(384), embedding_1536 = NULL
+                        WHERE embedding_1536 IS NOT NULL AND embedding_model ~ '\\:384(\\:[0-9a-f]{8})?$';
+                    UPDATE campus_knowledge_records SET embedding_768 =
+                        subvector(embedding_1536, 1, 768)::vector(768), embedding_1536 = NULL
+                        WHERE embedding_1536 IS NOT NULL AND embedding_model ~ '\\:768(\\:[0-9a-f]{8})?$';
+                ELSE
+                    UPDATE campus_knowledge_records SET embedding_1536 = NULL
+                        WHERE embedding_1536 IS NOT NULL
+                        AND (
+                            embedding_model ~ '\\:384(\\:[0-9a-f]{8})?$'
+                            OR embedding_model ~ '\\:768(\\:[0-9a-f]{8})?$'
+                        );
+                END IF;
+            END $$;
+            """
         )
         for dimensions in (384, 768, 1536):
             op.execute(
