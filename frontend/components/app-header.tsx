@@ -11,6 +11,7 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
@@ -45,7 +46,14 @@ export function AppHeader({ email }: { email?: string | null }) {
             <MenuIcon />
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-72 p-2">
-            {email ? <DropdownMenuLabel className="flex items-center gap-2 px-2 py-2"><UserRoundIcon className="size-4" /><span className="min-w-0 truncate">{email}</span></DropdownMenuLabel> : null}
+            {email ? (
+              <DropdownMenuGroup>
+                <DropdownMenuLabel className="flex items-center gap-2 px-2 py-2">
+                  <UserRoundIcon className="size-4" />
+                  <span className="min-w-0 truncate">{email}</span>
+                </DropdownMenuLabel>
+              </DropdownMenuGroup>
+            ) : null}
             <DropdownMenuSeparator />
             <DropdownMenuItem render={<Link href="/" />} className="min-h-10 px-2"><HomeIcon />{pick({ tr: "Ana sayfa", en: "Home" })}</DropdownMenuItem>
             <DropdownMenuItem render={<Link href="/updates" />} className="min-h-10 px-2"><BellRingIcon />{pick({ tr: "Güncellemeler", en: "Updates" })}</DropdownMenuItem>
