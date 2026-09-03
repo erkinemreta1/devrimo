@@ -82,6 +82,7 @@ bash -lc "
   set -e
   export PATH='$NODE_BIN':\$PATH
   cd '$DEPLOY_DIR/frontend'
+  rm -rf .next
   npm ci
   npm run build
 "
