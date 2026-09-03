@@ -157,6 +157,17 @@ export type SourceRevision = {
 
 export type KnowledgeSourceDetail = KnowledgeSource & { revision_history: SourceRevision[] };
 
+export type BatchSourceInput = {
+  name: string;
+  kind: string;
+  url?: string | null;
+  language?: "tr" | "en";
+  authority?: number;
+  audience?: Record<string, unknown>;
+  schedule_seconds?: number;
+  config?: Record<string, unknown>;
+};
+
 export type EmbeddingSettings = {
   provider: "disabled" | "local" | "remote";
   model: string;

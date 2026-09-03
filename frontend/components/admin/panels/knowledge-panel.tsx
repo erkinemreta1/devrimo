@@ -8,6 +8,7 @@ import {
   DatabaseZapIcon,
   EyeIcon,
   ExternalLinkIcon,
+  LayersIcon,
   LinkIcon,
   ListChecksIcon,
   PlusIcon,
@@ -15,6 +16,7 @@ import {
   RocketIcon,
   SaveIcon,
   SearchIcon,
+  SparklesIcon,
   XIcon,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -280,25 +282,303 @@ function BulkSourceEditor({ ids, onClear, onDone }: { ids: string[]; onClear: ()
   </div></CardContent></Card>;
 }
 
+const SAMPLE_BATCH_TEMPLATES = [
+  {
+    name: "METU Kafeterya Yemek Menüsü",
+    kind: "drupal",
+    url: "https://kafeterya.metu.edu.tr",
+    language: "tr",
+    authority: 95,
+    schedule_seconds: 10800,
+    config: {
+      item_selector: ".views-row, article",
+      defaults: { record_type: "announcement" },
+    },
+  },
+  {
+    name: "METU Kütüphane Çalışma Saatleri",
+    kind: "drupal",
+    url: "https://lib.metu.edu.tr/tr",
+    language: "tr",
+    authority: 95,
+    schedule_seconds: 21600,
+    config: {
+      item_selector: ".views-row, article",
+      defaults: { record_type: "service_status" },
+    },
+  },
+  {
+    name: "METU Sağlık ve Rehberlik Merkezi (SRM)",
+    kind: "drupal",
+    url: "https://srm.metu.edu.tr/tr",
+    language: "tr",
+    authority: 90,
+    schedule_seconds: 86400,
+    config: {
+      item_selector: "article, .views-row",
+      defaults: { record_type: "guide" },
+    },
+  },
+  {
+    name: "METU Uluslararası İşbirliği Ofisi (ICO)",
+    kind: "drupal",
+    url: "https://ico.metu.edu.tr",
+    language: "en",
+    authority: 95,
+    schedule_seconds: 21600,
+    config: {
+      item_selector: "article, .views-row",
+      defaults: { record_type: "announcement" },
+    },
+  },
+];
+
 function CreateSourceDialog({ open, onOpenChange, onDone }: { open: boolean; onOpenChange: (open: boolean) => void; onDone: () => void }) {
   const { pick } = useLocale();
+  const [mode, setMode] = useState<"single" | "batch">("single");
+
+  // Single mode state
   const [name, setName] = useState("");
   const [kind, setKind] = useState<(typeof SOURCE_KINDS)[number]>("drupal");
   const [url, setUrl] = useState("");
   const [recordType, setRecordType] = useState("announcement");
   const [config, setConfig] = useState("{}");
   const parsedConfig = parseJsonObject(config);
-  const mutation = useMutation({
+
+  // Batch mode state
+  const [batchJson, setBatchJson] = useState("");
+  const batchParsed = useMemo(() => {
+    if (!batchJson.trim()) return { items: [] as any[], error: null };
+    try {
+      const parsed = JSON.parse(batchJson);
+      if (!Array.isArray(parsed)) {
+        return { items: [], error: pick({ tr: "Girdi bir JSON dizisi [...] olmalıdır.", en: "Input must be a JSON array [...]." }) };
+      }
+      if (parsed.length === 0) {
+        return { items: [], error: pick({ tr: "En az 1 kaynak gereklidir.", en: "At least 1 source is required." }) };
+      }
+      if (parsed.length > 100) {
+        return { items: [], error: pick({ tr: "Tek seferde en fazla 100 kaynak eklenebilir.", en: "Maximum 100 sources per batch." }) };
+      }
+      for (let i = 0; i < parsed.length; i++) {
+        const item = parsed[i];
+        if (!item || typeof item !== "object") {
+          return { items: [], error: `#${i + 1} ${pick({ tr: "kaynak geçerli bir nesne değil.", en: "source is not a valid object." })}` };
+        }
+        if (!item.name || typeof item.name !== "string" || item.name.trim().length < 2) {
+          return { items: [], error: `#${i + 1} ${pick({ tr: "kaynağın geçerli bir adı olmalı (min 2 karakter).", en: "source must have a valid name (min 2 chars)." })}` };
+        }
+        if (!item.kind || !SOURCE_KINDS.includes(item.kind)) {
+          return { items: [], error: `#${i + 1} ${pick({ tr: "kaynağın geçerli bir türü olmalı.", en: "source must have a valid kind." })}` };
+        }
+      }
+      return { items: parsed, error: null };
+    } catch (err) {
+      return { items: [], error: err instanceof Error ? err.message : "Invalid JSON" };
+    }
+  }, [batchJson, pick]);
+
+  const singleMutation = useMutation({
     mutationFn: () => {
       if (!parsedConfig) throw new Error("Configuration must be a JSON object");
       const defaults = asJsonObject(parsedConfig.defaults) ?? {};
-      return adminMutate("sources", "POST", { name, kind, url: url || null, language: "tr", authority: 70, audience: {}, schedule_seconds: 3600, config: { ...parsedConfig, defaults: { ...defaults, record_type: recordType } } });
+      return adminMutate("sources", "POST", {
+        name,
+        kind,
+        url: url || null,
+        language: "tr",
+        authority: 70,
+        audience: {},
+        schedule_seconds: 3600,
+        config: { ...parsedConfig, defaults: { ...defaults, record_type: recordType } },
+      });
     },
-    onSuccess: () => { toast.success(pick({ tr: "Taslak kaynak oluşturuldu", en: "Draft source created" })); setName(""); setUrl(""); setConfig("{}"); onDone(); },
+    onSuccess: () => {
+      toast.success(pick({ tr: "Taslak kaynak oluşturuldu", en: "Draft source created" }));
+      setName("");
+      setUrl("");
+      setConfig("{}");
+      onDone();
+    },
     onError: (error) => toast.error(error.message),
   });
+
+  const batchMutation = useMutation({
+    mutationFn: () => {
+      if (batchParsed.error || !batchParsed.items.length) {
+        throw new Error(batchParsed.error ?? "No valid sources");
+      }
+      return adminMutate<{ count: number; items: unknown[] }>("sources/batch", "POST", {
+        items: batchParsed.items,
+      });
+    },
+    onSuccess: (data) => {
+      toast.success(
+        `${data.count} ${pick({
+          tr: "taslak kaynak topluca oluşturuldu",
+          en: "draft sources created in batch",
+        })}`
+      );
+      setBatchJson("");
+      onDone();
+    },
+    onError: (error) => toast.error(error.message),
+  });
+
   const validConfig = parsedConfig !== null;
-  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="sm:max-w-2xl"><DialogHeader><DialogTitle>{pick({ tr: "Kampüs kaynağı ekle", en: "Add campus source" })}</DialogTitle><DialogDescription>{pick({ tr: "Kaynak taslak olarak kaydedilir; önizleme ve yayınlama ayrı adımlardır.", en: "The source is saved as a draft; preview and publish are separate steps." })}</DialogDescription></DialogHeader><div className="grid gap-4 sm:grid-cols-2"><div className="space-y-2"><Label>{pick({ tr: "Ad", en: "Name" })}</Label><Input value={name} onChange={(event) => setName(event.target.value)} /></div><div className="space-y-2"><Label>{pick({ tr: "Kaynak türü", en: "Source type" })}</Label><Select value={kind} onValueChange={(value) => setKind((value ?? "drupal") as typeof kind)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{SOURCE_KINDS.map((value) => <SelectItem key={value} value={value}>{value.replaceAll("_", " ")}</SelectItem>)}</SelectContent></Select></div><div className="space-y-2 sm:col-span-2"><Label>URL</Label><Input value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://…" /></div><div className="space-y-2"><Label>{pick({ tr: "İçerik türü", en: "Content type" })}</Label><Select value={recordType} onValueChange={(value) => setRecordType(value ?? "announcement")}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{["announcement", "calendar", "event", "service_status", "guide", "course", "policy"].map((value) => <SelectItem key={value} value={value}>{value.replaceAll("_", " ")}</SelectItem>)}</SelectContent></Select></div><div className="space-y-2 sm:col-span-2"><Label>{pick({ tr: "Gelişmiş çıkarma ayarları", en: "Advanced extraction settings" })}</Label><Textarea className="min-h-28 font-mono text-xs" value={config} onChange={(event) => setConfig(event.target.value)} /><p className={cn("text-xs text-muted-foreground", !validConfig && "text-destructive")}>{validConfig ? pick({ tr: "Seçiciler ve alan eşlemeleri için isteğe bağlı JSON nesnesi.", en: "Optional JSON object for selectors and field mappings." }) : pick({ tr: "Geçerli bir JSON nesnesi gerekli.", en: "A valid JSON object is required." })}</p></div></div><DialogFooter><Button variant="outline" onClick={() => onOpenChange(false)}>{pick({ tr: "Vazgeç", en: "Cancel" })}</Button><Button disabled={name.trim().length < 2 || !validConfig || mutation.isPending} onClick={() => mutation.mutate()}>{pick({ tr: "Taslağı oluştur", en: "Create draft" })}</Button></DialogFooter></DialogContent></Dialog>;
+  const isBatchValid = !batchParsed.error && batchParsed.items.length > 0;
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>{pick({ tr: "Kampüs kaynağı ekle", en: "Add campus source" })}</DialogTitle>
+          <DialogDescription>
+            {pick({
+              tr: "Kaynaklar taslak olarak kaydedilir; önizleme ve yayınlama ayrı adımlardır.",
+              en: "Sources are saved as drafts; preview and publish are separate steps.",
+            })}
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="flex gap-2 border-b pb-3">
+          <Button
+            type="button"
+            variant={mode === "single" ? "default" : "outline"}
+            size="sm"
+            onClick={() => setMode("single")}
+          >
+            {pick({ tr: "Tek Kaynak", en: "Single Source" })}
+          </Button>
+          <Button
+            type="button"
+            variant={mode === "batch" ? "default" : "outline"}
+            size="sm"
+            onClick={() => setMode("batch")}
+          >
+            <LayersIcon className="size-4" />
+            {pick({ tr: "Toplu Ekle (JSON)", en: "Batch Import (JSON)" })}
+          </Button>
+        </div>
+
+        {mode === "single" ? (
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-2">
+              <Label>{pick({ tr: "Ad", en: "Name" })}</Label>
+              <Input value={name} onChange={(event) => setName(event.target.value)} />
+            </div>
+            <div className="space-y-2">
+              <Label>{pick({ tr: "Kaynak türü", en: "Source type" })}</Label>
+              <Select value={kind} onValueChange={(value) => setKind((value ?? "drupal") as typeof kind)}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {SOURCE_KINDS.map((value) => (
+                    <SelectItem key={value} value={value}>{value.replaceAll("_", " ")}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2 sm:col-span-2">
+              <Label>URL</Label>
+              <Input value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://…" />
+            </div>
+            <div className="space-y-2">
+              <Label>{pick({ tr: "İçerik türü", en: "Content type" })}</Label>
+              <Select value={recordType} onValueChange={(value) => setRecordType(value ?? "announcement")}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {["announcement", "calendar", "event", "service_status", "guide", "course", "policy"].map((value) => (
+                    <SelectItem key={value} value={value}>{value.replaceAll("_", " ")}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2 sm:col-span-2">
+              <Label>{pick({ tr: "Gelişmiş çıkarma ayarları", en: "Advanced extraction settings" })}</Label>
+              <Textarea className="min-h-28 font-mono text-xs" value={config} onChange={(event) => setConfig(event.target.value)} />
+              <p className={cn("text-xs text-muted-foreground", !validConfig && "text-destructive")}>
+                {validConfig
+                  ? pick({ tr: "Seçiciler ve alan eşlemeleri için isteğe bağlı JSON nesnesi.", en: "Optional JSON object for selectors and field mappings." })
+                  : pick({ tr: "Geçerli bir JSON nesnesi gerekli.", en: "A valid JSON object is required." })}
+              </p>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <Label>{pick({ tr: "JSON Kaynak Dizisi", en: "JSON Source Array" })}</Label>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setBatchJson(JSON.stringify(SAMPLE_BATCH_TEMPLATES, null, 2))}
+                >
+                  <SparklesIcon className="size-3.5 text-primary" />
+                  {pick({ tr: "Örnek şablonları yükle", en: "Load sample templates" })}
+                </Button>
+                {batchJson ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setBatchJson("")}
+                  >
+                    {pick({ tr: "Temizle", en: "Clear" })}
+                  </Button>
+                ) : null}
+              </div>
+            </div>
+
+            <Textarea
+              className="min-h-60 font-mono text-xs leading-relaxed"
+              value={batchJson}
+              onChange={(event) => setBatchJson(event.target.value)}
+              placeholder={`[\n  {\n    "name": "METU Cafeteria",\n    "kind": "drupal",\n    "url": "https://kafeterya.metu.edu.tr",\n    "authority": 95,\n    "config": { ... }\n  }\n]`}
+            />
+
+            <div className="flex items-center justify-between text-xs">
+              {batchParsed.error ? (
+                <p className="text-destructive font-medium">{batchParsed.error}</p>
+              ) : isBatchValid ? (
+                <p className="text-primary font-medium">
+                  ✓ {batchParsed.items.length} {pick({ tr: "kaynak algılandı ve hazır", en: "sources detected and ready" })}
+                </p>
+              ) : (
+                <p className="text-muted-foreground">
+                  {pick({ tr: "Kaynak nesnelerinden oluşan bir JSON dizisi girin.", en: "Enter a JSON array of source objects." })}
+                </p>
+              )}
+            </div>
+          </div>
+        )}
+
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            {pick({ tr: "Vazgeç", en: "Cancel" })}
+          </Button>
+          {mode === "single" ? (
+            <Button
+              disabled={name.trim().length < 2 || !validConfig || singleMutation.isPending}
+              onClick={() => singleMutation.mutate()}
+            >
+              {pick({ tr: "Taslağı oluştur", en: "Create draft" })}
+            </Button>
+          ) : (
+            <Button
+              disabled={!isBatchValid || batchMutation.isPending}
+              onClick={() => batchMutation.mutate()}
+            >
+              <LayersIcon className="size-4" />
+              {batchParsed.items.length > 0
+                ? `${batchParsed.items.length} ${pick({ tr: "Taslağı Toplu Oluştur", en: "Drafts Batch Create" })}`
+                : pick({ tr: "Toplu Oluştur", en: "Batch Create" })}
+            </Button>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
 }
 
 function SourceDialog({ source, onOpenChange, onDone }: { source: KnowledgeSource | null; onOpenChange: (open: boolean) => void; onDone: () => void }) {

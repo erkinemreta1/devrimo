@@ -559,3 +559,81 @@ async def test_sais_context_sync_never_reads_the_transcript(client, monkeypatch)
     async with SessionLocal() as db:
         snapshots = (await db.execute(select(StudentAcademicSnapshot))).scalars().all()
     assert [s for s in snapshots if s.user_id == user_id] == []
+
+
+async def test_batch_create_sources(client, monkeypatch):
+    admin_id = new_user_id()
+    monkeypatch.setattr(get_settings(), "admin_bootstrap_user_ids", str(admin_id))
+    await client.get("/api/v1/profile", headers=auth_header(admin_id))
+
+    payload = {
+        "items": [
+            {
+                "name": "Cafeteria Lunch Menu",
+                "kind": "drupal",
+                "url": "https://kafeterya.metu.edu.tr",
+                "language": "tr",
+                "authority": 95,
+                "schedule_seconds": 10800,
+                "config": {
+                    "item_selector": ".views-row, article",
+                    "defaults": {"record_type": "announcement"},
+                },
+            },
+            {
+                "name": "METU Library Hours",
+                "kind": "html_page",
+                "url": "https://lib.metu.edu.tr/hours",
+                "language": "en",
+                "authority": 90,
+                "schedule_seconds": 3600,
+                "config": {
+                    "content_selector": "main",
+                    "defaults": {"record_type": "service_status"},
+                },
+            },
+        ]
+    }
+
+    res = await client.post(
+        "/api/v1/admin/sources/batch",
+        headers=auth_header(admin_id),
+        json=payload,
+    )
+    assert res.status_code == 201, res.text
+    body = res.json()
+    assert body["count"] == 2
+    assert len(body["items"]) == 2
+    assert body["items"][0]["name"] == "Cafeteria Lunch Menu"
+    assert body["items"][0]["revision"] == 1
+    assert body["items"][0]["validation"]["ok"] is True
+    assert body["items"][1]["name"] == "METU Library Hours"
+    assert body["items"][1]["revision"] == 1
+    assert body["items"][1]["validation"]["ok"] is True
+
+    # Check that secrets are rejected in batch
+    secret_payload = {
+        "items": [
+            {
+                "name": "Bad Source",
+                "kind": "json",
+                "url": "https://api.metu.edu.tr/data",
+                "config": {"api_key": "supersecret"},
+            }
+        ]
+    }
+    secret_res = await client.post(
+        "/api/v1/admin/sources/batch",
+        headers=auth_header(admin_id),
+        json=secret_payload,
+    )
+    assert secret_res.status_code == 422
+
+    # Check empty items validation
+    empty_res = await client.post(
+        "/api/v1/admin/sources/batch",
+        headers=auth_header(admin_id),
+        json={"items": []},
+    )
+    assert empty_res.status_code == 422
+

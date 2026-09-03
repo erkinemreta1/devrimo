@@ -76,6 +76,10 @@ class SourceCreateIn(BaseModel):
         return _reject_secret_config(value)
 
 
+class SourceBatchCreateIn(BaseModel):
+    items: list[SourceCreateIn] = Field(min_length=1, max_length=100)
+
+
 class RevisionIn(BaseModel):
     config: dict[str, Any]
 
@@ -281,6 +285,32 @@ async def create_source(
         after={"source_id": str(source.id), "kind": source.kind, "revision": revision.revision},
     )
     return {**_source_out(source), "revision": revision.revision, "validation": revision.validation}
+
+
+@router.post("/sources/batch", status_code=status.HTTP_201_CREATED)
+async def batch_create_sources(
+    body: SourceBatchCreateIn,
+    principal: AdminPrincipal = Depends(require(AdminPermission.knowledge_write)),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    created = []
+    for item in body.items:
+        source, revision = await registry.create_source(
+            db,
+            organization_id=_org(principal),
+            actor_id=principal.user.id,
+            **item.model_dump(),
+        )
+        created.append({**_source_out(source), "revision": revision.revision, "validation": revision.validation})
+    await record_event(
+        db,
+        actor_user_id=principal.user.id,
+        organization_id=_org(principal),
+        action="knowledge_source.batch_create",
+        result="success",
+        after={"created": len(created), "source_ids": [s["id"] for s in created]},
+    )
+    return {"items": created, "count": len(created)}
 
 
 @router.put("/sources/bulk")
