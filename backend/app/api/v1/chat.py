@@ -285,7 +285,7 @@ async def chat_completions(
     user: AuthenticatedUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> StreamingResponse:
-    agent = await manager.get_agent_or_404(db, user.id)
+    agent = await manager.get_or_create_agent(db, user.id)
 
     latest_user_message = next(
         (m.content for m in reversed(body.messages) if m.role == "user"),
@@ -372,7 +372,7 @@ async def confirm_tool_call(
     db: AsyncSession = Depends(get_db),
 ) -> StreamingResponse:
     """Approve or reject an Agno-paused tool call, scoped to its owner and session."""
-    agent = await manager.get_agent_or_404(db, user.id)
+    agent = await manager.get_or_create_agent(db, user.id)
     result = await db.execute(
         select(ChatSession).where(
             ChatSession.id == body.session_id,

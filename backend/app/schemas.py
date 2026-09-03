@@ -1,13 +1,9 @@
-"""Response/request shapes, kept in lockstep with frontend/lib/types.ts.
-
-Field names here are the JSON wire format the frontend already expects —
-see Agent, ChatMessage, ChatSession, and ChatCompletionsRequest in that file.
-"""
+"""Canonical API request and response shapes exported through OpenAPI."""
 
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 
 from app.campus.catalog import CAMPUS_TOOLS, CampusTool
 from app.campus.credentials import CampusSecrets
@@ -15,6 +11,8 @@ from app.campus.mcp_config import enabled_tools as resolve_enabled_tools
 from app.db.models import Agent, AgentStatus, CampusCredential, ChatSession, UserProfile
 
 ChatRole = Literal["system", "user", "assistant"]
+Locale = Literal["tr", "en"]
+CampusCredentialKind = Literal["metu_password", "odtuclass"]
 
 
 class AgentOut(BaseModel):
@@ -55,7 +53,7 @@ class ChatConfirmationIn(BaseModel):
 
 
 class ChatMessageOut(BaseModel):
-    role: str
+    role: ChatRole
     content: str
     created_at: str | None = None
 
@@ -101,7 +99,7 @@ class CampusToolOut(BaseModel):
     description_tr: str
     scope_en: str
     scope_tr: str
-    requires: list[str]
+    requires: list[CampusCredentialKind]
     default_enabled: bool
     # Chosen by the student.
     enabled: bool = False
@@ -139,7 +137,7 @@ class CampusConnectionOut(BaseModel):
     has_password: bool = False
     has_odtuclass_token: bool = False
     odtuclass_base_url: str | None = None
-    locale: str = "tr"
+    locale: Locale = "tr"
     enabled_tools: list[str] = Field(default_factory=list)
     verified_at: datetime | None = None
     verification_error: str | None = None
@@ -187,17 +185,11 @@ class CampusConnectionIn(BaseModel):
     metu_password: str | None = Field(default=None, max_length=512)
     odtuclass_token: str | None = Field(default=None, max_length=512)
     odtuclass_base_url: str | None = Field(default=None, max_length=255)
-    locale: str = "tr"
+    locale: Locale = "tr"
     enabled_tools: list[str] | None = None
     # Skip the live SSO check — useful when METU is down and the student would
     # rather save now and find out later.
     skip_verification: bool = False
-
-    @field_validator("locale")
-    @classmethod
-    def _known_locale(cls, value: str) -> str:
-        return value if value in ("tr", "en") else "tr"
-
 
 class CampusVerifyIn(BaseModel):
     metu_username: str = Field(min_length=1, max_length=255)
@@ -217,7 +209,7 @@ class ProfileOut(BaseModel):
     user_id: str
     display_name: str | None = None
     department: str | None = None
-    locale: str = "tr"
+    locale: Locale = "tr"
     mail_facts_enabled: bool = False
     onboarding_step: str | None = None
     onboarding_completed: bool = False
@@ -242,14 +234,7 @@ class ProfileIn(BaseModel):
 
     display_name: str | None = Field(default=None, max_length=255)
     department: str | None = Field(default=None, max_length=255)
-    locale: str | None = None
+    locale: Locale | None = None
     mail_facts_enabled: bool | None = None
     onboarding_step: str | None = Field(default=None, max_length=64)
     onboarding_completed: bool | None = None
-
-    @field_validator("locale")
-    @classmethod
-    def _known_locale(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        return value if value in ("tr", "en") else "tr"

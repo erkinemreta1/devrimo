@@ -5,18 +5,12 @@ from app.agents.store import get_agno_db
 
 def _purge(user_id: str) -> None:
     db = get_agno_db()
-    sessions = db.get_sessions(user_id=user_id, include_runs=False)
-    if isinstance(sessions, tuple):
-        sessions = sessions[0]
-    session_ids = [
-        str(session.get("session_id") if isinstance(session, dict) else session.session_id)
-        for session in sessions
-    ]
+    sessions = db.get_sessions(user_id=user_id, include_runs=False, deserialize=True)
+    session_ids = [str(session.session_id) for session in sessions]
     if session_ids:
         db.delete_sessions(session_ids, user_id=user_id)
-    memories, _ = db.get_user_memory_stats(user_id=user_id, limit=10000)
-    memory_ids = [str(memory.get("memory_id") or memory.get("id")) for memory in memories]
-    memory_ids = [memory_id for memory_id in memory_ids if memory_id not in {"None", ""}]
+    memories = db.get_user_memories(user_id=user_id, limit=10000, deserialize=True)
+    memory_ids = [str(memory.memory_id) for memory in memories if memory.memory_id]
     if memory_ids:
         db.delete_user_memories(memory_ids, user_id=user_id)
     db.delete_user_learnings(user_id=user_id)

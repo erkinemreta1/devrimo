@@ -59,6 +59,7 @@ jobs:
         working-directory: frontend
         run: |
           npm ci
+          npm run contracts:check
           npm run lint
           npm run build
 

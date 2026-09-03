@@ -1,20 +1,35 @@
+import { ApiError } from "@/lib/api/errors";
+
 /**
  * Client-side fetch for this app's own /api routes.
  *
- * Those routes answer with `{ error }` on failure (see lib/api/route-utils.ts),
- * so the thrown Error carries the broker's message rather than a bare status —
- * onboarding shows these strings directly to the student.
+ * Error extraction lives here for browser routes, authenticated broker calls,
+ * and admin calls so every surface handles the same response shape.
  */
 export type JsonFetchInit = Omit<RequestInit, "body"> & { body?: unknown };
 
-export class RequestFailedError extends Error {
-  status: number;
-
-  constructor(message: string, status: number) {
-    super(message);
-    this.name = "RequestFailedError";
-    this.status = status;
+export function apiErrorMessage(status: number, payload: unknown): string {
+  if (typeof payload === "string" && payload.trim()) return payload;
+  if (payload && typeof payload === "object") {
+    const record = payload as Record<string, unknown>;
+    for (const key of ["detail", "error", "message"] as const) {
+      const value = record[key];
+      if (typeof value === "string" && value.trim()) return value;
+      if (value && typeof value === "object") {
+        const nested = apiErrorMessage(status, value);
+        if (nested !== `Request failed (${status})`) return nested;
+      }
+    }
   }
+  return `Request failed (${status})`;
+}
+
+export async function apiErrorFromResponse(response: Response): Promise<ApiError> {
+  const contentType = response.headers.get("content-type") ?? "";
+  const payload = contentType.includes("application/json")
+    ? await response.json().catch(() => null)
+    : await response.text().catch(() => "");
+  return new ApiError(apiErrorMessage(response.status, payload), response.status, payload);
 }
 
 export async function jsonFetch<T>(path: string, init: JsonFetchInit = {}): Promise<T> {
@@ -30,15 +45,13 @@ export async function jsonFetch<T>(path: string, init: JsonFetchInit = {}): Prom
     body: body === undefined ? undefined : JSON.stringify(body),
   });
 
-  if (!response.ok) {
-    const payload = await response.json().catch(() => null);
-    const message =
-      payload && typeof payload === "object" && "error" in payload && typeof payload.error === "string"
-        ? payload.error
-        : response.statusText || `Request failed (${response.status})`;
-    throw new RequestFailedError(message, response.status);
-  }
-
   if (response.status === 204) return undefined as T;
-  return (await response.json()) as T;
+  if (!response.ok) {
+    throw await apiErrorFromResponse(response);
+  }
+  const contentType = response.headers.get("content-type") ?? "";
+  const payload = contentType.includes("application/json")
+    ? await response.json().catch(() => null)
+    : await response.text().catch(() => "");
+  return payload as T;
 }

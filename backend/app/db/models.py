@@ -361,15 +361,14 @@ class CampusSourceRevision(Base):
 class KnowledgeEmbeddingSettings(Base):
     """Per-organization embedding provider configuration.
 
-    API keys are encrypted and the fixed storage width remains 1536. Providers
-    with smaller vectors are zero-padded by the embedding service, preserving
-    cosine similarity without making the pgvector index provider-specific.
+    API keys are encrypted. Supported native vector widths each have their own
+    HNSW index, avoiding zero padding while retaining indexed ANN retrieval.
     """
 
     __tablename__ = "knowledge_embedding_settings"
     __table_args__ = (
         CheckConstraint("provider IN ('disabled', 'local', 'remote')", name="ck_embedding_settings_provider"),
-        CheckConstraint("dimensions BETWEEN 1 AND 1536", name="ck_embedding_settings_dimensions"),
+        CheckConstraint("dimensions IN (384, 768, 1536)", name="ck_embedding_settings_dimensions"),
         CheckConstraint("batch_size BETWEEN 1 AND 128", name="ck_embedding_settings_batch_size"),
     )
 
@@ -460,7 +459,9 @@ class CampusKnowledgeRecord(Base):
             "ix_knowledge_records_embedding_model_current",
             "embedding_model",
             "source_id",
-            postgresql_where=text("is_current AND embedding IS NOT NULL"),
+            postgresql_where=text(
+                "is_current AND (embedding_384 IS NOT NULL OR embedding_768 IS NOT NULL OR embedding_1536 IS NOT NULL)"
+            ),
         ),
         Index("ix_knowledge_records_type_dates", "record_type", "starts_at", "ends_at"),
         Index("ix_knowledge_records_audience", "campus", "department", "degree_level"),
@@ -490,7 +491,9 @@ class CampusKnowledgeRecord(Base):
     authority: Mapped[int] = mapped_column(Integer, default=50, nullable=False)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     metadata_json: Mapped[dict] = mapped_column("metadata", JSON, default=dict, nullable=False)
-    embedding: Mapped[list[float] | None] = mapped_column(Vector(1536), nullable=True)
+    embedding_384: Mapped[list[float] | None] = mapped_column(Vector(384), nullable=True)
+    embedding_768: Mapped[list[float] | None] = mapped_column(Vector(768), nullable=True)
+    embedding_1536: Mapped[list[float] | None] = mapped_column(Vector(1536), nullable=True)
     embedding_model: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_current: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

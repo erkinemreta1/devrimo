@@ -45,13 +45,15 @@ os.environ["DATABASE_URL"] = f"{_base}/{_TEST_DB}".replace("postgresql://", "pos
 # columns are Postgres generated columns and the indexes are GIN/HNSW, none of
 # which the model metadata carries. Running them here also means every test
 # exercises the exact DDL production receives.
-subprocess.run(
+_migration = subprocess.run(
     [sys.executable, "-m", "alembic", "upgrade", "head"],
     cwd=Path(__file__).resolve().parent.parent,
     env={**os.environ},
-    check=True,
     capture_output=True,
+    text=True,
 )
+if _migration.returncode:
+    raise RuntimeError(f"Test database migration failed:\n{_migration.stderr}")
 
 
 def _drop_test_database() -> None:

@@ -116,11 +116,11 @@ def _is_connected(toolkit: MCPTools) -> bool:
 
     ``MCPTools.connect()`` logs and swallows every failure rather than raising
     — a server whose interpreter is missing entirely returns normally from
-    ``connect()`` — so the return value says nothing. ``_initialized`` is the
-    only honest signal, and an unconnected toolkit handed to an Agent
+    ``connect()`` — so the return value says nothing. The SDK's public
+    ``initialized`` property is the honest signal, and an unconnected toolkit handed to an Agent
     advertises no tools while still being asked about on every run.
     """
-    return bool(getattr(toolkit, "_initialized", False))
+    return toolkit.initialized
 
 
 async def connect_toolkits(toolkits: list[MCPTools]) -> list[MCPTools]:

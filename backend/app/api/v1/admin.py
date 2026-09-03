@@ -93,7 +93,8 @@ async def _token_usage(principal: AdminPrincipal, db: AsyncSession) -> dict:
     if principal.organization_id is not None:
         organization_filter = (
             "WHERE EXISTS (SELECT 1 FROM account_directory ad "
-            "WHERE replace(CAST(ad.user_id AS TEXT), '-', '') = replace(CAST(r.user_id AS TEXT), '-', '') "
+            "WHERE r.user_id ~* '^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?"
+            "[0-9a-f]{4}-?[0-9a-f]{12}$' AND ad.user_id = CAST(r.user_id AS UUID) "
             "AND CAST(ad.organization_id AS TEXT) = :organization_id)"
         )
         params["organization_id"] = str(principal.organization_id)

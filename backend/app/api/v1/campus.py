@@ -130,13 +130,8 @@ async def apply_connection(
     user: AuthenticatedUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> CampusConnectionOut:
-    """Rebuild the agent container so a pending campus change takes effect.
-
-    Exposed separately from the PUT because rebuilding costs a container
-    restart: a student toggling several tools in the settings UI shouldn't
-    pay for it on each toggle.
-    """
-    agent = await manager.get_agent_or_404(db, user.id)
+    """Invalidate any resident runtime so the next turn uses current tools."""
+    agent = await manager.get_or_create_agent(db, user.id)
     await manager.apply_campus_config(db, agent)
     return await _connection_out(db, user.id)
 

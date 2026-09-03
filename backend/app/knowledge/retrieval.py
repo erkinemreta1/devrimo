@@ -19,7 +19,7 @@ from sqlalchemy import Float, case, func, literal, literal_column, or_, select, 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import CampusKnowledgeRecord, CampusSource
-from app.knowledge.embeddings import embed_query, get_embedding_config
+from app.knowledge.embeddings import embed_query, embedding_column, get_embedding_config
 
 # Reciprocal Rank Fusion. The constant damps the influence of the very top of
 # each list so a single channel cannot dominate the fused ordering.
@@ -230,12 +230,13 @@ async def search_knowledge(
         ),
     ]
     if query_embedding is not None:
+        vector_column = embedding_column(config.dimensions)
         channels.append(
             (
                 _ranked_channel(
                     conditions,
-                    CampusKnowledgeRecord.embedding.cosine_distance(query_embedding),
-                    CampusKnowledgeRecord.embedding_model == config.model_label,
+                    vector_column.cosine_distance(query_embedding),
+                    (CampusKnowledgeRecord.embedding_model == config.model_label) & vector_column.is_not(None),
                     candidate_limit,
                     descending=False,
                     name="semantic",

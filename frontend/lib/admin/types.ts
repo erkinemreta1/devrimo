@@ -1,4 +1,6 @@
-export type AdminRole = "super_admin" | "operator" | "campus_admin";
+import type { components } from "@/lib/api/schema";
+
+export type AdminRole = components["schemas"]["AdminRole"];
 
 export type AdminPrincipal = {
   user_id: string;
@@ -157,16 +159,7 @@ export type SourceRevision = {
 
 export type KnowledgeSourceDetail = KnowledgeSource & { revision_history: SourceRevision[] };
 
-export type BatchSourceInput = {
-  name: string;
-  kind: string;
-  url?: string | null;
-  language?: "tr" | "en";
-  authority?: number;
-  audience?: Record<string, unknown>;
-  schedule_seconds?: number;
-  config?: Record<string, unknown>;
-};
+export type BatchSourceInput = components["schemas"]["SourceCreateIn"];
 
 export type EmbeddingSettings = {
   provider: "disabled" | "local" | "remote";

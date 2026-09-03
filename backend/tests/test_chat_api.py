@@ -75,10 +75,11 @@ async def test_stream_is_actually_chunked(client):
     assert len(content_frames) > 1
 
 
-async def test_chat_completions_without_agent_is_404(client):
+async def test_first_chat_lazily_creates_the_agent(client):
     headers = auth_header(new_user_id())
     response = await send(client, headers, "hi")
-    assert response.status_code == 404
+    assert response.status_code == 200
+    assert "hi" in text_of(response.content)
 
 
 async def test_chat_with_no_user_message_is_400(client):

@@ -1,47 +1,64 @@
+import asyncio
 from datetime import datetime
+from functools import lru_cache
 from typing import Any
 from uuid import UUID
 
-import httpx
+from supabase import Client, create_client
+from supabase.client import ClientOptions
+from supabase_auth.errors import AuthApiError
 
 from app.config import get_settings
 
 
+@lru_cache
+def _client() -> Client:
+    settings = get_settings()
+    if not settings.supabase_url.startswith("http") or not settings.supabase_secret_key:
+        raise RuntimeError("Supabase Auth Admin is not configured")
+    return create_client(
+        settings.supabase_url,
+        settings.supabase_secret_key,
+        options=ClientOptions(auto_refresh_token=False, persist_session=False),
+    )
+
+
+def _serialized(value: Any) -> Any:
+    if hasattr(value, "model_dump"):
+        return value.model_dump(mode="json")
+    if isinstance(value, list):
+        return [_serialized(item) for item in value]
+    return value
+
+
 class SupabaseAdmin:
-    def __init__(self) -> None:
-        settings = get_settings()
-        self.base_url = f"{settings.supabase_url.rstrip('/')}/auth/v1/admin"
-        self.key = settings.supabase_secret_key
-
-    def _headers(self) -> dict[str, str]:
-        if not self.base_url.startswith("http") or not self.key:
-            raise RuntimeError("Supabase Auth Admin is not configured")
-        return {"apikey": self.key, "Authorization": f"Bearer {self.key}"}
-
-    async def _request(self, method: str, path: str, **kwargs: Any) -> Any:
-        async with httpx.AsyncClient(timeout=20) as client:
-            response = await client.request(method, f"{self.base_url}{path}", headers=self._headers(), **kwargs)
-        response.raise_for_status()
-        return response.json() if response.content else None
+    @property
+    def auth(self):
+        return _client().auth.admin
 
     async def invite(self, email: str) -> dict:
-        return await self._request("POST", "/invite", json={"email": email})
+        response = await asyncio.to_thread(self.auth.invite_user_by_email, email)
+        return _serialized(response)
 
     async def update_user(self, user_id: UUID, **values: Any) -> dict:
-        return await self._request("PUT", f"/users/{user_id}", json=values)
+        response = await asyncio.to_thread(self.auth.update_user_by_id, str(user_id), values)
+        return _serialized(response)
 
     async def delete_user(self, user_id: UUID) -> None:
         try:
-            await self._request("DELETE", f"/users/{user_id}")
-        except httpx.HTTPStatusError as exc:
+            await asyncio.to_thread(self.auth.delete_user, str(user_id))
+        except AuthApiError as exc:
             # A prior deletion attempt may have completed remotely before a
             # local cleanup failed. Treating 404 as success makes retry safe.
-            if exc.response.status_code != 404:
+            if str(getattr(exc, "status", getattr(exc, "code", ""))) != "404":
                 raise
 
     async def list_users(self, page: int = 1, per_page: int = 1000) -> list[dict]:
-        payload = await self._request("GET", "/users", params={"page": page, "per_page": per_page})
-        return payload.get("users", payload if isinstance(payload, list) else [])
+        response = await asyncio.to_thread(self.auth.list_users, page=page, per_page=per_page)
+        payload = _serialized(response)
+        if isinstance(payload, dict):
+            return payload.get("users", [])
+        return payload if isinstance(payload, list) else []
 
 
 def parse_auth_time(value: str | None) -> datetime | None:

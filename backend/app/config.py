@@ -1,4 +1,5 @@
 from functools import lru_cache
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -95,7 +96,7 @@ class Settings(BaseSettings):
     knowledge_fetch_user_agent: str = "DevrimoCampusIndexer/1.0 (+https://devrimo.app)"
     knowledge_embedding_enabled: bool = False
     knowledge_embedding_model: str = "text-embedding-3-small"
-    knowledge_embedding_dimensions: int = 1536
+    knowledge_embedding_dimensions: Literal[384, 768, 1536] = 1536
     knowledge_embedding_base_url: str = "https://api.openai.com/v1"
     knowledge_embedding_api_key: str = ""
 

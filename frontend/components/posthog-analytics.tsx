@@ -44,7 +44,6 @@ type ProductEventProperties = {
   agent_action_confirmation: { approved: boolean; tool: string };
 
   // --- agent + campus -----------------------------------------------------
-  agent_provisioned: { result: "success" | "error" };
   campus_connection_saved: { source: "onboarding" | "settings"; result: "success" | "error"; verification_skipped: boolean };
   campus_tools_changed: { source: "onboarding" | "settings"; tool_count: number; result: "success" | "error" };
   campus_disconnected: { result: "success" | "error" };

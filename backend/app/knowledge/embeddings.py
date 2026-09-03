@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Sequence
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any
 from uuid import UUID
 
@@ -11,11 +12,23 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.core.crypto import decrypt_secret
-from app.db.models import KnowledgeEmbeddingSettings
+from app.db.models import CampusKnowledgeRecord, KnowledgeEmbeddingSettings
 from app.logging import get_logger
 
-VECTOR_STORAGE_DIMENSIONS = 1536
+SUPPORTED_VECTOR_DIMENSIONS = (384, 768, 1536)
 logger = get_logger(__name__)
+
+
+@lru_cache
+def _embedding_client() -> httpx.AsyncClient:
+    """One pooled client for all embedding batches in this process."""
+    return httpx.AsyncClient(timeout=60)
+
+
+async def close_embedding_client() -> None:
+    if _embedding_client.cache_info().currsize:
+        await _embedding_client().aclose()
+        _embedding_client.cache_clear()
 
 
 class EmbeddingResponseError(ValueError):
@@ -76,7 +89,7 @@ async def get_embedding_config(db: AsyncSession, organization_id: UUID) -> Embed
         provider=provider,
         model=settings.knowledge_embedding_model,
         base_url=settings.knowledge_embedding_base_url if provider == "remote" else None,
-        dimensions=max(1, min(settings.knowledge_embedding_dimensions, VECTOR_STORAGE_DIMENSIONS)),
+        dimensions=settings.knowledge_embedding_dimensions,
         batch_size=32,
         api_key=settings.knowledge_embedding_api_key or None,
     )
@@ -91,14 +104,13 @@ async def _request_embeddings(config: EmbeddingConfig, texts: Sequence[str]) -> 
     # output width and reject the OpenAI-specific dimensions parameter.
     if config.provider == "remote":
         body["dimensions"] = config.dimensions
-    async with httpx.AsyncClient(timeout=60) as client:
-        response = await client.post(
-            f"{config.base_url.rstrip('/')}/embeddings",
-            headers=headers,
-            json=body,
-        )
-        response.raise_for_status()
-        payload = response.json()
+    response = await _embedding_client().post(
+        f"{config.base_url.rstrip('/')}/embeddings",
+        headers=headers,
+        json=body,
+    )
+    response.raise_for_status()
+    payload = response.json()
     return _response_vectors(payload, len(texts))
 
 
@@ -134,13 +146,31 @@ def _response_vectors(payload: Any, expected_count: int) -> list[list[float]]:
 
 
 def _storage_vector(vector: Sequence[float], expected_dimensions: int) -> list[float]:
+    if expected_dimensions not in SUPPORTED_VECTOR_DIMENSIONS:
+        raise ValueError(f"Embedding dimensions must be one of {SUPPORTED_VECTOR_DIMENSIONS}")
     if len(vector) != expected_dimensions:
         raise ValueError(
             f"Embedding provider returned {len(vector)} dimensions; expected {expected_dimensions}"
         )
-    if len(vector) > VECTOR_STORAGE_DIMENSIONS:
-        raise ValueError(f"Embedding vectors cannot exceed {VECTOR_STORAGE_DIMENSIONS} dimensions")
-    return [float(value) for value in vector] + [0.0] * (VECTOR_STORAGE_DIMENSIONS - len(vector))
+    return [float(value) for value in vector]
+
+
+def embedding_column(dimensions: int):
+    columns = {
+        384: CampusKnowledgeRecord.embedding_384,
+        768: CampusKnowledgeRecord.embedding_768,
+        1536: CampusKnowledgeRecord.embedding_1536,
+    }
+    try:
+        return columns[dimensions]
+    except KeyError as exc:
+        raise ValueError(f"Embedding dimensions must be one of {SUPPORTED_VECTOR_DIMENSIONS}") from exc
+
+
+def assign_embedding(record: CampusKnowledgeRecord, vector: list[float] | None, dimensions: int) -> None:
+    record.embedding_384 = vector if dimensions == 384 else None
+    record.embedding_768 = vector if dimensions == 768 else None
+    record.embedding_1536 = vector if dimensions == 1536 else None
 
 
 async def embed_texts(

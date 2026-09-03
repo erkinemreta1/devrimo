@@ -5,7 +5,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, field_validator, model_validator
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.admin.audit import record_event
@@ -25,7 +25,7 @@ from app.db.models import (
 )
 from app.db.session import get_db
 from app.knowledge import registry
-from app.knowledge.embeddings import get_embedding_config
+from app.knowledge.embeddings import embedding_column, get_embedding_config
 from app.knowledge.retrieval import search_knowledge
 from app.knowledge.templates import DEFAULT_SOURCE_TEMPLATES
 
@@ -117,7 +117,7 @@ class EmbeddingSettingsIn(BaseModel):
     provider: Literal["disabled", "local", "remote"]
     model: str = Field(min_length=1, max_length=300)
     base_url: str | None = Field(default=None, max_length=2000)
-    dimensions: int = Field(default=1536, ge=1, le=1536)
+    dimensions: Literal[384, 768, 1536] = 1536
     batch_size: int = Field(default=32, ge=1, le=128)
     # Retrieval models expect a query and the passage answering it to be
     # embedded with different instructions; the wording is provider-specific.
@@ -575,13 +575,19 @@ async def _embedding_out(db: AsyncSession, organization_id: UUID) -> dict:
         )
     )
     total_records = int(await db.scalar(record_scope) or 0)
-    embedded_records = int(
-        await db.scalar(record_scope.where(CampusKnowledgeRecord.embedding.is_not(None))) or 0
+    has_embedding = or_(
+        CampusKnowledgeRecord.embedding_384.is_not(None),
+        CampusKnowledgeRecord.embedding_768.is_not(None),
+        CampusKnowledgeRecord.embedding_1536.is_not(None),
     )
+    embedded_records = int(await db.scalar(record_scope.where(has_embedding)) or 0)
     current_model_records = (
         int(
             await db.scalar(
-                record_scope.where(CampusKnowledgeRecord.embedding_model == config.model_label)
+                record_scope.where(
+                    CampusKnowledgeRecord.embedding_model == config.model_label,
+                    embedding_column(config.dimensions).is_not(None),
+                )
             )
             or 0
         )

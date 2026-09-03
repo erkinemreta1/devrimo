@@ -38,7 +38,7 @@ def _header(scope: Scope, name: bytes) -> str | None:
     return None
 
 
-def _user_id_from_bearer(scope: Scope) -> str | None:
+def _user_from_bearer(scope: Scope):
     """Best-effort identity. Never raises: this is telemetry, not authorization.
 
     The route's own ``get_current_user`` dependency remains the only thing that
@@ -50,7 +50,7 @@ def _user_id_from_bearer(scope: Scope) -> str | None:
     try:
         from app.auth.jwt import verify_access_token
 
-        return str(verify_access_token(authorization[7:].strip()).id)
+        return verify_access_token(authorization[7:].strip())
     except Exception:
         return None
 
@@ -69,7 +69,13 @@ class ObservabilityMiddleware:
         settings = get_settings()
         request_id = _header(scope, b"x-request-id") or str(uuid4())
         session_id = _header(scope, b"x-posthog-session-id")
-        user_id = _user_id_from_bearer(scope)
+        authenticated_user = _user_from_bearer(scope)
+        user_id = str(authenticated_user.id) if authenticated_user else None
+        if authenticated_user is not None:
+            # Starlette exposes this same mapping as request.state. The route
+            # dependency reuses the verified token instead of doing the same
+            # signature/JWKS work a second time.
+            scope.setdefault("state", {})["authenticated_user"] = authenticated_user
         path = scope.get("path", "")
         method = scope.get("method", "")
 

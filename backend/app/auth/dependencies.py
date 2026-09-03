@@ -1,4 +1,4 @@
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,11 +10,13 @@ _bearer = HTTPBearer(auto_error=False)
 
 
 async def get_current_user(
+    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
     db: AsyncSession = Depends(get_db),
 ) -> AuthenticatedUser:
     if credentials is None or not credentials.credentials:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Unauthorized")
-    user = verify_access_token(credentials.credentials)
+    cached = getattr(request.state, "authenticated_user", None)
+    user = cached if isinstance(cached, AuthenticatedUser) else verify_access_token(credentials.credentials)
     await touch_account(db, user.id, user.email)
     return user

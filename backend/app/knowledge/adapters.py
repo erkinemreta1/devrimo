@@ -5,12 +5,14 @@ import io
 import json
 import re
 from abc import ABC, abstractmethod
-from datetime import UTC, datetime
+from calendar import timegm
+from datetime import UTC, date, datetime, time
 from typing import Any
 from urllib.parse import urljoin
-from xml.etree import ElementTree
 
+import feedparser
 from bs4 import BeautifulSoup
+from icalendar import Calendar
 from pypdf import PdfReader
 
 from app.knowledge.types import FetchedDocument, ParsedRecord
@@ -75,10 +77,6 @@ def _path(value: Any, dotted: str | None) -> Any:
         else:
             return None
     return current
-
-
-def _xml_value(node, *names: str) -> str:
-    return next((_clean(node.findtext(name)) for name in names if node.find(name) is not None), "")
 
 
 def _record(raw: dict[str, Any], defaults: dict[str, Any], source_url: str | None = None) -> ParsedRecord:
@@ -230,24 +228,26 @@ class FeedAdapter(SourceAdapter):
     def parse(self, document: FetchedDocument | None, config: dict[str, Any]) -> list[ParsedRecord]:
         if document is None:
             return []
-        root = ElementTree.fromstring(document.body)
+        feed = feedparser.parse(document.body)
+        if feed.bozo and not feed.entries:
+            raise ValueError(f"Invalid RSS/Atom feed: {feed.bozo_exception}")
         defaults = config.get("defaults", {})
         result = []
-        items = root.findall(".//item") or root.findall(".//{*}entry")
-        for item in items:
-            link_node = item.find("link") or item.find("{*}link")
-            link = _xml_value(item, "link", "{*}link") or (
-                link_node.get("href") if link_node is not None else ""
-            )
+        for item in feed.entries:
+            content = item.get("content") or []
+            content_value = content[0].get("value") if content and isinstance(content[0], dict) else None
+            published = item.get("published_parsed") or item.get("updated_parsed")
+            published_at = datetime.fromtimestamp(timegm(published), tz=UTC).isoformat() if published else None
+            link = _clean(item.get("link"))
             result.append(
                 _record(
                     {
-                        "external_id": _xml_value(item, "guid", "{*}id") or link,
-                        "title": _xml_value(item, "title", "{*}title"),
-                        "content": _xml_value(item, "description", "{*}summary", "{*}content"),
-                        "summary": _xml_value(item, "description", "{*}summary"),
+                        "external_id": _clean(item.get("id")) or link,
+                        "title": item.get("title"),
+                        "content": content_value or item.get("summary") or item.get("description"),
+                        "summary": item.get("summary") or item.get("description"),
                         "url": link,
-                        "published_at": _xml_value(item, "pubDate", "{*}published", "{*}updated"),
+                        "published_at": published_at,
                     },
                     defaults,
                     document.url,
@@ -256,24 +256,12 @@ class FeedAdapter(SourceAdapter):
         return result
 
 
-def _unfold_ical(text: str) -> list[str]:
-    lines: list[str] = []
-    for line in text.replace("\r\n", "\n").split("\n"):
-        if line.startswith((" ", "\t")) and lines:
-            lines[-1] += line[1:]
-        else:
-            lines.append(line)
-    return lines
-
-
-def _ical_date(value: str) -> str:
-    raw = value.split(":", 1)[-1]
-    for pattern in ("%Y%m%dT%H%M%SZ", "%Y%m%dT%H%M%S", "%Y%m%d"):
-        try:
-            return datetime.strptime(raw, pattern).replace(tzinfo=UTC).isoformat()
-        except ValueError:
-            pass
-    return raw
+def _ical_datetime(value: Any) -> str | None:
+    if isinstance(value, datetime):
+        return (value.replace(tzinfo=UTC) if value.tzinfo is None else value).isoformat()
+    if isinstance(value, date):
+        return datetime.combine(value, time.min, tzinfo=UTC).isoformat()
+    return _clean(value) or None
 
 
 class IcalAdapter(SourceAdapter):
@@ -281,29 +269,25 @@ class IcalAdapter(SourceAdapter):
         if document is None:
             return []
         defaults = {"record_type": "calendar", **config.get("defaults", {})}
-        result, event = [], None
-        for line in _unfold_ical(document.text):
-            if line == "BEGIN:VEVENT":
-                event = {}
-            elif line == "END:VEVENT" and event is not None:
-                result.append(
-                    _record(
-                        {
-                            "external_id": event.get("UID"),
-                            "title": event.get("SUMMARY"),
-                            "content": event.get("DESCRIPTION") or event.get("SUMMARY"),
-                            "url": event.get("URL"),
-                            "starts_at": _ical_date(event.get("DTSTART", "")),
-                            "ends_at": _ical_date(event.get("DTEND", "")),
-                        },
-                        defaults,
-                        document.url,
-                    )
+        result = []
+        calendar = Calendar.from_ical(document.body)
+        for event in calendar.walk("VEVENT"):
+            summary = _clean(event.get("summary"))
+            description = _clean(event.get("description"))
+            result.append(
+                _record(
+                    {
+                        "external_id": _clean(event.get("uid")),
+                        "title": summary,
+                        "content": description or summary,
+                        "url": _clean(event.get("url")),
+                        "starts_at": _ical_datetime(event.decoded("dtstart", None)),
+                        "ends_at": _ical_datetime(event.decoded("dtend", None)),
+                    },
+                    defaults,
+                    document.url,
                 )
-                event = None
-            elif event is not None and ":" in line:
-                key = line.split(":", 1)[0].split(";", 1)[0]
-                event[key] = line.split(":", 1)[1].replace("\\n", " ")
+            )
         return result
 
 

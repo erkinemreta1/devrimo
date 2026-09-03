@@ -7,6 +7,7 @@ both are plain database reads — opening last month's conversation costs a
 query, not an agent build.
 """
 
+import asyncio
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -98,7 +99,7 @@ async def get_session(
     session = await _get_owned_session(db, user.id, session_id)
 
     try:
-        messages = _load_history(session.agno_session_id or session.id, str(user.id))
+        messages = await asyncio.to_thread(_load_history, session.agno_session_id or session.id, str(user.id))
     except Exception as exc:
         # A history read failing should not blank the thread list; log it and
         # return the session with no messages rather than a 502.
@@ -131,7 +132,11 @@ async def delete_session(
     session = await _get_owned_session(db, user.id, session_id)
 
     try:
-        get_agno_db().delete_session(session_id=session.agno_session_id or session.id, user_id=str(user.id))
+        await asyncio.to_thread(
+            get_agno_db().delete_session,
+            session_id=session.agno_session_id or session.id,
+            user_id=str(user.id),
+        )
     except Exception as exc:
         # The row is still soft-deleted below, so the student stops seeing it
         # either way; an orphaned Agno session is a cleanup problem, not a

@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { useLocale } from "@/components/locale-provider";
 import { Badge } from "@/components/ui/badge";
+import { jsonFetch } from "@/lib/api/fetcher";
 import type { CampusUpdates } from "@/lib/types";
 
 const suggestions = {
@@ -54,7 +55,7 @@ export function MetuWelcome() {
 
 function CampusDigest() {
   const { pick } = useLocale();
-  const query = useQuery({ queryKey: ["student", "updates", "digest"], queryFn: async () => { const response = await fetch("/api/student/updates?digest=true&limit=3"); if (!response.ok) throw new Error("Updates unavailable"); return response.json() as Promise<CampusUpdates>; }, staleTime: 5 * 60_000 });
+  const query = useQuery({ queryKey: ["student", "updates", "digest"], queryFn: () => jsonFetch<CampusUpdates>("/api/student/updates?digest=true&limit=3"), staleTime: 5 * 60_000 });
   if (!query.data?.items.length) return null;
   return <section className="motion-enter mt-5 w-full rounded-2xl border bg-card/75 p-3 text-left shadow-sm [animation-delay:130ms]" aria-label={pick({ tr: "Kampüs özeti", en: "Campus digest" })}><div className="mb-2 flex items-center justify-between gap-3"><p className="flex items-center gap-2 text-sm font-semibold"><SparklesIcon className="size-4 text-primary" />{pick({ tr: "Senin için kampüs özeti", en: "Your campus digest" })}</p><Link href="/updates" className="text-xs font-medium text-primary hover:underline">{pick({ tr: "Tüm güncellemeler", en: "All updates" })}</Link></div><div className="grid gap-2 sm:grid-cols-3">{query.data.items.slice(0, 3).map((item) => <Link key={item.id} href={item.url || "/updates"} className="rounded-xl border bg-background/65 p-3 transition-colors hover:border-primary/25 hover:bg-background"><div className="mb-1 flex items-center gap-2"><Badge variant="outline" className="text-[10px]">{item.type.replaceAll("_", " ")}</Badge></div><p className="line-clamp-2 text-sm font-medium leading-5">{item.title}</p><p className="mt-1 line-clamp-1 text-[11px] text-muted-foreground">{item.source}</p></Link>)}</div></section>;
 }

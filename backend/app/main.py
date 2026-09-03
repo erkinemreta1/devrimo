@@ -12,6 +12,7 @@ from app.api.v1.admin import sync_directory
 from app.campus.manifest import commits_by_slug
 from app.config import get_settings
 from app.db.session import SessionLocal
+from app.knowledge.embeddings import close_embedding_client
 from app.logging import configure_logging, get_logger
 from app.observability import ObservabilityMiddleware, capture_exception, get_posthog
 from app.observability.client import shutdown as posthog_shutdown
@@ -66,6 +67,7 @@ async def lifespan(app: FastAPI):
         # student's METU credentials in their environment; leaving them
         # parented to a dead broker is not acceptable.
         await reset_pool()
+        await close_embedding_client()
         # Last, so anything the teardown above reported is still flushed. An
         # unflushed queue at SIGTERM loses exactly the events that explain
         # why the process is going away.

@@ -6,6 +6,7 @@ from app.knowledge.embeddings import (
     EmbeddingConfig,
     EmbeddingResponseError,
     _response_vectors,
+    _storage_vector,
     embed_query,
     embed_texts,
 )
@@ -64,14 +65,14 @@ async def test_batch_response_pairing_error_retries_single_inputs(monkeypatch):
         calls.append(list(texts))
         if len(texts) > 1:
             raise EmbeddingResponseError("Embedding provider returned inconsistent indexes")
-        return [[float(ord(texts[0][0]))]]
+        return [[float(ord(texts[0][0])), *([0.0] * 383)]]
 
     monkeypatch.setattr("app.knowledge.embeddings._request_embeddings", fake_request)
     config = EmbeddingConfig(
         provider="local",
         model="test",
         base_url="http://embedding.test/v1",
-        dimensions=1,
+        dimensions=384,
         batch_size=8,
     )
     vectors = await embed_texts(None, uuid4(), ["a", "b"], config=config)  # type: ignore[arg-type]
@@ -86,14 +87,14 @@ async def test_query_and_document_use_their_configured_instructions(monkeypatch)
 
     async def fake_request(_config, texts):
         calls.append(list(texts))
-        return [[1.0] for _ in texts]
+        return [[1.0, *([0.0] * 383)] for _ in texts]
 
     monkeypatch.setattr("app.knowledge.embeddings._request_embeddings", fake_request)
     config = EmbeddingConfig(
         provider="local",
         model="test",
         base_url="http://embedding.test/v1",
-        dimensions=1,
+        dimensions=384,
         batch_size=8,
         query_prefix="query: ",
         document_prefix="passage: ",
@@ -107,14 +108,27 @@ async def test_query_and_document_use_their_configured_instructions(monkeypatch)
 
 def test_document_instruction_is_part_of_the_model_identity():
     """Changing the document prefix must retire vectors from the old space."""
-    base = dict(provider="local", model="test", base_url="http://e.test/v1", dimensions=8, batch_size=4)
+    base = dict(provider="local", model="test", base_url="http://e.test/v1", dimensions=384, batch_size=4)
     plain = EmbeddingConfig(**base)
     prefixed = EmbeddingConfig(**base, document_prefix="passage: ")
     other = EmbeddingConfig(**base, document_prefix="belge: ")
 
     # An unconfigured prefix keeps the existing label so indexed corpora stay valid.
-    assert plain.model_label == "local:test:8"
+    assert plain.model_label == "local:test:384"
     assert prefixed.model_label != plain.model_label
     assert prefixed.model_label != other.model_label
     # The query instruction does not change what a stored vector means.
     assert EmbeddingConfig(**base, query_prefix="query: ").model_label == plain.model_label
+
+
+def test_storage_vector_keeps_supported_dimensions_native():
+    vector = [0.25] * 384
+
+    assert _storage_vector(vector, 384) == vector
+
+
+def test_storage_vector_rejects_padding_and_unsupported_dimensions():
+    with pytest.raises(ValueError, match="returned 3 dimensions"):
+        _storage_vector([1.0, 0.5, 0.25], 384)
+    with pytest.raises(ValueError, match="must be one of"):
+        _storage_vector([1.0, 0.5, 0.25], 3)

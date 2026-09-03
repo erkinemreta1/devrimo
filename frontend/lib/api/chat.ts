@@ -1,5 +1,6 @@
-import { apiFetch, asList } from "@/lib/api/client";
+import { apiFetch } from "@/lib/api/client";
 import { getApiBaseUrl } from "@/lib/env";
+import { apiErrorFromResponse } from "@/lib/api/fetcher";
 import type { ChatCompletionsRequest, ChatMessage, ChatSession } from "@/lib/types";
 
 export type ChatConfirmationRequirement = {
@@ -38,22 +39,15 @@ export type ChatContinuation = {
 };
 
 export function listChatSessions(token: string) {
-  return apiFetch<unknown>("/chat/sessions", { token }).then((data) =>
-    asList<ChatSession>(data, ["sessions", "items", "data", "results"]),
-  );
+  return apiFetch<{ sessions: ChatSession[] }>("/chat/sessions", { token }).then((data) => data.sessions);
 }
 
 export async function getChatSession(token: string, sessionId: string) {
-  const data = await apiFetch<unknown>(`/chat/sessions/${sessionId}`, { token });
-  const messages = asList<ChatMessage>(data, ["messages", "items", "data"]);
-  const session =
-    data && typeof data === "object" && !Array.isArray(data)
-      ? (data as ChatSession & { messages?: ChatMessage[] })
-      : undefined;
+  const data = await apiFetch<ChatSession & { messages: ChatMessage[] }>(`/chat/sessions/${sessionId}`, { token });
 
   return {
-    session: session ?? { id: sessionId },
-    messages,
+    session: data,
+    messages: data.messages,
   };
 }
 
@@ -148,16 +142,10 @@ export async function* streamChatCompletions(
   });
 
   if (!response.ok || !response.body) {
-    const payload = await response.text().catch(() => "");
     if (response.status === 409) {
       throw new Error("Your agent is answering another message. Please wait.");
     }
-    let message = payload;
-    try {
-      const parsed = JSON.parse(payload) as { detail?: string; message?: string; error?: string };
-      message = parsed.detail ?? parsed.message ?? parsed.error ?? payload;
-    } catch {}
-    throw new Error(message || `Chat request failed (${response.status})`);
+    throw await apiErrorFromResponse(response);
   }
 
   const reader = response.body.getReader();
@@ -205,7 +193,7 @@ export async function continueChatRun(
     }),
   });
   if (!response.ok || !response.body) {
-    throw new Error((await response.text().catch(() => "")) || `Confirmation failed (${response.status})`);
+    throw await apiErrorFromResponse(response);
   }
 
   const reader = response.body.getReader();

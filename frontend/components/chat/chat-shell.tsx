@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { captureError, captureProductEvent } from "@/components/posthog-analytics";
 import type { ChatConfirmation, ChatStreamError, ChatToolEvent } from "@/lib/api/chat";
+import { jsonFetch } from "@/lib/api/fetcher";
 import { Button } from "@/components/ui/button";
 import {
   Sheet,
@@ -192,21 +193,17 @@ function AssistantThread({
     if (!pendingConfirmation || !requirement || confirmationPending) return;
     setConfirmationPending(true);
     try {
-      const response = await fetch("/api/chat/confirm", {
+      const payload = await jsonFetch<{
+        text?: string;
+        confirmation?: ChatConfirmation | null;
+      }>("/api/chat/confirm", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+        body: {
           confirmation: pendingConfirmation,
           requirement_id: requirement.id,
           approved,
-        }),
+        },
       });
-      const payload = (await response.json().catch(() => ({}))) as {
-        text?: string;
-        confirmation?: ChatConfirmation | null;
-        detail?: string;
-      };
-      if (!response.ok) throw new Error(payload.detail || "Confirmation failed");
       const continuationText =
         payload.text ||
         (!payload.confirmation
@@ -239,12 +236,12 @@ function AssistantThread({
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              {pick({ tr: "Bu e-posta gönderilsin mi?", en: "Send this email?" })}
+              {pick({ tr: "Bu işlem çalıştırılsın mı?", en: "Run this action?" })}
             </AlertDialogTitle>
             <AlertDialogDescription>
               {pick({
-                tr: "Göndermeden önce alıcıyı, konuyu ve iletiyi dikkatlice kontrol et.",
-                en: "Review the recipient, subject, and message carefully before sending.",
+                tr: `${requirement?.tool ?? "Araç"} aracına gönderilecek bilgileri dikkatlice kontrol et.`,
+                en: `Review the information that will be sent to ${requirement?.tool ?? "this tool"}.`,
               })}
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -257,7 +254,7 @@ function AssistantThread({
             </AlertDialogCancel>
             <AlertDialogAction disabled={confirmationPending} onClick={() => void resolveConfirmation(true)}>
               {confirmationPending ? <Loader2Icon className="animate-spin" /> : null}
-              {pick({ tr: "Onayla ve gönder", en: "Approve and send" })}
+              {pick({ tr: "Onayla ve çalıştır", en: "Approve and run" })}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

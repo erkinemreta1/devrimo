@@ -45,7 +45,7 @@ def _public_address(value: str) -> bool:
     )
 
 
-async def _validate_destination(url: str, policy: FetchPolicy) -> str:
+async def _validate_destination(url: str, policy: FetchPolicy) -> tuple[str, tuple[str, ...]]:
     host = _normalized_host(url)
     if host not in policy.allowed_hosts:
         raise FetchRejected(f"Host is outside this source's allowlist: {host}")
@@ -57,7 +57,38 @@ async def _validate_destination(url: str, policy: FetchPolicy) -> str:
     addresses = {entry[4][0].split("%", 1)[0] for entry in infos}
     if not addresses or any(not _public_address(address) for address in addresses):
         raise FetchRejected("Private, local, or reserved network destinations are blocked")
-    return host
+    return host, tuple(sorted(addresses))
+
+
+def _url_for_address(url: str, address: str) -> str:
+    """Replace only the connection host, preserving path/query and scheme."""
+    parsed = urlparse(url)
+    rendered = f"[{address}]" if ":" in address else address
+    if parsed.port:
+        rendered = f"{rendered}:{parsed.port}"
+    return parsed._replace(netloc=rendered).geturl()
+
+
+async def _send_pinned(
+    client: httpx.AsyncClient,
+    url: str,
+    policy: FetchPolicy,
+    *,
+    headers: dict[str, str] | None = None,
+    stream: bool = False,
+) -> httpx.Response:
+    """Resolve, validate, and connect to that exact address.
+
+    TLS still verifies and sends SNI for the original hostname. DNS cannot be
+    rebound between validation and the socket connect because httpx receives
+    the already-resolved IP as its connection origin.
+    """
+    host, addresses = await _validate_destination(url, policy)
+    parsed = urlparse(url)
+    request_headers = {"Host": parsed.netloc, **(headers or {})}
+    request = client.build_request("GET", _url_for_address(url, addresses[0]), headers=request_headers)
+    request.extensions["sni_hostname"] = host
+    return await client.send(request, stream=stream, follow_redirects=False)
 
 
 async def _read_limited(response: httpx.Response, limit: int) -> bytes:
@@ -74,9 +105,8 @@ async def _read_limited(response: httpx.Response, limit: int) -> bytes:
 async def _robots_allowed(client: httpx.AsyncClient, url: str, policy: FetchPolicy, user_agent: str) -> bool:
     parsed = urlparse(url)
     robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
-    await _validate_destination(robots_url, policy)
     try:
-        response = await client.get(robots_url, follow_redirects=False)
+        response = await _send_pinned(client, robots_url, policy)
     except httpx.HTTPError:
         return True
     if response.status_code >= 400:
@@ -100,9 +130,9 @@ async def fetch_document(
     client = client or httpx.AsyncClient(
         timeout=settings.knowledge_fetch_timeout_seconds,
         headers={"User-Agent": settings.knowledge_fetch_user_agent},
+        trust_env=False,
     )
     try:
-        await _validate_destination(url, policy)
         if policy.respect_robots and not await _robots_allowed(
             client, url, policy, settings.knowledge_fetch_user_agent
         ):
@@ -114,9 +144,7 @@ async def fetch_document(
             headers["If-Modified-Since"] = last_modified
         current = url
         for _ in range(policy.max_redirects + 1):
-            await _validate_destination(current, policy)
-            request = client.build_request("GET", current, headers=headers)
-            response = await client.send(request, stream=True)
+            response = await _send_pinned(client, current, policy, headers=headers, stream=True)
             if response.status_code in {301, 302, 303, 307, 308}:
                 location = response.headers.get("location")
                 await response.aclose()

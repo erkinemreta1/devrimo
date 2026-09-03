@@ -10,7 +10,7 @@ from app.config import get_settings
 from app.db.models import CampusIngestionJob, CampusKnowledgeRecord, CampusSource, CampusSourceRevision
 from app.knowledge.adapters import adapter_for
 from app.knowledge.chunking import chunk_records, embedding_text
-from app.knowledge.embeddings import EmbeddingConfig, embed_texts, get_embedding_config
+from app.knowledge.embeddings import EmbeddingConfig, assign_embedding, embed_texts, get_embedding_config
 from app.knowledge.fetcher import FetchPolicy, fetch_document
 from app.knowledge.registry import REMOTE_KINDS
 from app.knowledge.types import ParsedRecord
@@ -193,7 +193,7 @@ async def process_job(db: AsyncSession, job: CampusIngestionJob) -> int:
         embeddings, config = await _embed_batches(db, job, source, texts)
         await _set_progress(db, job, "storing")
         for row, embedding in zip(rows, embeddings, strict=True):
-            row.embedding = embedding
+            assign_embedding(row, embedding, config.dimensions)
             row.embedding_model = config.model_label if embedding is not None else None
         now = datetime.now(UTC)
         job.status = "completed"
@@ -205,6 +205,10 @@ async def process_job(db: AsyncSession, job: CampusIngestionJob) -> int:
         await db.commit()
         return len(rows)
 
+    # The source/revision reads above opened a transaction. Release it before
+    # DNS, HTTP, parsing, and embedding I/O so the pool connection is not held
+    # for the duration of a remote ingestion.
+    await db.commit()
     await _set_progress(db, job, "fetching" if source.kind in REMOTE_KINDS else "parsing")
     records, headers = await _load_records(source, revision)
     if records is None:
@@ -271,7 +275,7 @@ async def process_job(db: AsyncSession, job: CampusIngestionJob) -> int:
         row.authority = source.authority
         row.content_hash = content_hash
         row.metadata_json = record.metadata
-        row.embedding = embedding
+        assign_embedding(row, embedding, config.dimensions)
         row.embedding_model = config.model_label if embedding is not None else None
         row.is_current = True
         row.last_seen_at = now

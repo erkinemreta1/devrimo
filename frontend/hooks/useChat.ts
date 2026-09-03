@@ -1,35 +1,19 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { jsonFetch } from "@/lib/api/fetcher";
 import type { ChatMessage, ChatSession } from "@/lib/types";
-
-async function parseError(response: Response) {
-  const body = await response.json().catch(() => null);
-  const message =
-    (body && typeof body === "object" && "error" in body && typeof body.error === "string"
-      ? body.error
-      : null) || response.statusText;
-  throw new Error(message);
-}
 
 export function useChatSessions() {
   const queryClient = useQueryClient();
 
   const query = useQuery({
     queryKey: ["chat-sessions"],
-    queryFn: async () => {
-      const response = await fetch("/api/sessions");
-      if (!response.ok) await parseError(response);
-      const data = (await response.json()) as { sessions: ChatSession[] };
-      return data.sessions ?? [];
-    },
+    queryFn: () => jsonFetch<{ sessions: ChatSession[] }>("/api/sessions").then((data) => data.sessions),
   });
 
   const remove = useMutation({
-    mutationFn: async (sessionId: string) => {
-      const response = await fetch(`/api/sessions/${sessionId}`, { method: "DELETE" });
-      if (!response.ok) await parseError(response);
-    },
+    mutationFn: (sessionId: string) => jsonFetch<void>(`/api/sessions/${sessionId}`, { method: "DELETE" }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["chat-sessions"] }),
   });
 
@@ -43,8 +27,6 @@ export function useChatSessions() {
 }
 
 export async function loadSessionMessages(sessionId: string): Promise<ChatMessage[]> {
-  const response = await fetch(`/api/sessions/${sessionId}`);
-  if (!response.ok) await parseError(response);
-  const data = (await response.json()) as { messages: ChatMessage[] };
+  const data = await jsonFetch<{ messages: ChatMessage[] }>(`/api/sessions/${sessionId}`);
   return data.messages ?? [];
 }

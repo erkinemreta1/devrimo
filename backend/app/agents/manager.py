@@ -47,6 +47,22 @@ async def get_agent_or_404(db: AsyncSession, user_id: UUID) -> Agent:
     return agent
 
 
+async def get_or_create_agent(db: AsyncSession, user_id: UUID) -> Agent:
+    """Create the lightweight entitlement lazily on the first real use."""
+    agent = await get_agent(db, user_id)
+    if agent is not None:
+        return agent
+    try:
+        return await provision(db, user_id)
+    except HTTPException as exc:
+        if exc.status_code != status.HTTP_409_CONFLICT:
+            raise
+        agent = await get_agent(db, user_id)
+        if agent is None:
+            raise
+        return agent
+
+
 async def provision(db: AsyncSession, user_id: UUID) -> Agent:
     """Grant this user an agent.
 

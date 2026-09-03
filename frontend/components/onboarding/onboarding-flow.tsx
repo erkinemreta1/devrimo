@@ -230,8 +230,8 @@ export function OnboardingFlow({ onDone }: { onDone?: () => void }) {
           </h1>
           <p className="mt-2 text-sm leading-6 text-muted-foreground">
             {pick({
-              tr: "Devrimo, ODTÜ kampüs hayatı için kişisel bir asistan. Sadece sana ait, yalıtılmış bir çalışma alanında çalışır — ne konuştuğunuz başka hiçbir öğrenciyle paylaşılmaz.",
-              en: "Devrimo is a personal assistant for METU campus life. It runs in an isolated workspace that belongs only to you — nothing you say here is shared with another student.",
+              tr: "Devrimo, ODTÜ kampüs hayatı için kişisel bir asistan. Konuşmaların ve bağlantıların yalnızca sana ait — hiçbir şey başka bir öğrenciyle paylaşılmaz.",
+              en: "Devrimo is a personal assistant for METU campus life. Your conversations and connections stay private to you and are never shared with another student.",
             })}
           </p>
           <p className="mt-3 text-sm leading-6 text-muted-foreground">

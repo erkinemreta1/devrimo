@@ -2,6 +2,7 @@ import hashlib
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
+import httpx
 import pytest
 from sqlalchemy import select
 
@@ -20,7 +21,7 @@ from app.db.models import (
 )
 from app.db.session import SessionLocal
 from app.knowledge.adapters import adapter_for
-from app.knowledge.fetcher import FetchPolicy, FetchRejected, fetch_document
+from app.knowledge.fetcher import FetchPolicy, FetchRejected, _send_pinned, fetch_document
 from app.knowledge.ingestion import claim_job, process_job
 from app.knowledge.retrieval import read_campus_page, search_knowledge
 from app.knowledge.types import FetchedDocument
@@ -51,12 +52,60 @@ def test_pure_adapters_normalize_curated_json_and_ical():
     assert calendar[0].starts_at == datetime(2026, 10, 5, 6, tzinfo=UTC)
 
 
+def test_feed_adapter_handles_namespaced_content_and_atom_links():
+    document = FetchedDocument(
+        "https://example.edu/feed.xml",
+        b"""<?xml version="1.0" encoding="UTF-8"?>
+        <feed xmlns="http://www.w3.org/2005/Atom">
+          <entry>
+            <id>notice-1</id><title>Registration</title>
+            <link href="/notices/1" />
+            <updated>2026-09-03T09:30:00+03:00</updated>
+            <content type="html"><![CDATA[<p>Registration is open.</p>]]></content>
+          </entry>
+        </feed>""",
+        "application/atom+xml",
+    )
+
+    records = adapter_for("rss").parse(document, {"defaults": {"language": "en"}})
+
+    assert records[0].external_id == "notice-1"
+    assert records[0].url == "https://example.edu/notices/1"
+    assert "Registration is open" in records[0].content
+    assert records[0].published_at == datetime(2026, 9, 3, 6, 30, tzinfo=UTC)
+
+
 async def test_fetcher_rejects_private_network_destinations():
     with pytest.raises(FetchRejected, match="Private"):
         await fetch_document(
             "http://127.0.0.1/internal",
             FetchPolicy(allowed_hosts=frozenset({"127.0.0.1"}), respect_robots=False),
         )
+
+
+async def test_fetcher_connects_to_the_validated_address(monkeypatch):
+    policy = FetchPolicy(allowed_hosts=frozenset({"example.edu"}), respect_robots=False)
+
+    async def validated(_url, _policy):
+        return "example.edu", ("203.0.113.10",)
+
+    seen: dict[str, object] = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        seen["host"] = request.headers["host"]
+        seen["sni"] = request.extensions.get("sni_hostname")
+        return httpx.Response(200, request=request)
+
+    monkeypatch.setattr("app.knowledge.fetcher._validate_destination", validated)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        await _send_pinned(client, "https://example.edu/notices?id=1", policy)
+
+    assert seen == {
+        "url": "https://203.0.113.10/notices?id=1",
+        "host": "example.edu",
+        "sni": "example.edu",
+    }
 
 
 def test_unknown_or_malformed_prerequisite_rules_fail_closed():
@@ -117,7 +166,9 @@ async def test_source_publish_ingest_search_and_personalized_updates(client, mon
         assert job is not None
         assert await process_job(db, job) == 1
         record = (await db.execute(select(CampusKnowledgeRecord))).scalar_one()
-        assert record.embedding is None
+        assert record.embedding_384 is None
+        assert record.embedding_768 is None
+        assert record.embedding_1536 is None
         assert record.is_current is True
 
     debug_search = await client.get(
@@ -205,7 +256,7 @@ async def test_source_publish_ingest_search_and_personalized_updates(client, mon
             "provider": "remote",
             "model": "remote-test",
             "base_url": "https://embedding.example/v1",
-            "dimensions": 3,
+            "dimensions": 384,
             "batch_size": 2,
         },
     )
@@ -217,7 +268,7 @@ async def test_source_publish_ingest_search_and_personalized_updates(client, mon
             "provider": "remote",
             "model": "remote-test",
             "base_url": "https://embedding.example/v1",
-            "dimensions": 3,
+            "dimensions": 384,
             "batch_size": 2,
             "api_key": "remote-secret-key",
         },
@@ -237,7 +288,7 @@ async def test_source_publish_ingest_search_and_personalized_updates(client, mon
             "provider": "local",
             "model": "local-test",
             "base_url": "http://embedding:11434/v1",
-            "dimensions": 3,
+            "dimensions": 384,
             "batch_size": 2,
         },
     )
@@ -247,7 +298,7 @@ async def test_source_publish_ingest_search_and_personalized_updates(client, mon
 
     async def fake_embeddings(config, texts):
         assert config.provider == "local"
-        return [[1.0, 0.5, 0.25] for _ in texts]
+        return [[1.0, 0.5, 0.25, *([0.0] * 381)] for _ in texts]
 
     monkeypatch.setattr("app.knowledge.embeddings._request_embeddings", fake_embeddings)
     reindex = await client.post("/api/v1/admin/embedding/reindex", headers=auth_header(admin_id))
@@ -258,9 +309,11 @@ async def test_source_publish_ingest_search_and_personalized_updates(client, mon
         assert job is not None and job.kind == "reembed"
         assert await process_job(db, job) == 1
         record = (await db.execute(select(CampusKnowledgeRecord))).scalar_one()
-        assert record.embedding is not None and len(record.embedding) == 1536
-        assert record.embedding[:3] == [1.0, 0.5, 0.25]
-        assert record.embedding_model == "local:local-test:3"
+        assert record.embedding_384 is not None and len(record.embedding_384) == 384
+        assert record.embedding_384[:3] == [1.0, 0.5, 0.25]
+        assert record.embedding_768 is None
+        assert record.embedding_1536 is None
+        assert record.embedding_model == "local:local-test:384"
         stored_settings = (await db.execute(select(KnowledgeEmbeddingSettings))).scalar_one()
         assert stored_settings.api_key_enc is None  # Switching to local removes the remote secret.
     embedding_status = await client.get("/api/v1/admin/embedding-settings", headers=auth_header(admin_id))
@@ -282,7 +335,7 @@ async def test_source_publish_ingest_search_and_personalized_updates(client, mon
             "provider": "local",
             "model": "local-test",
             "base_url": "http://embedding:11434/v1",
-            "dimensions": 3,
+            "dimensions": 384,
             "batch_size": 2,
             "query_prefix": "query: ",
             "document_prefix": "passage: ",
@@ -291,7 +344,7 @@ async def test_source_publish_ingest_search_and_personalized_updates(client, mon
     assert prefixed.status_code == 200, prefixed.text
     assert prefixed.json()["query_prefix"] == "query: "
     assert prefixed.json()["document_prefix"] == "passage: "
-    assert prefixed.json()["model_label"] != "local:local-test:3"
+    assert prefixed.json()["model_label"] != "local:local-test:384"
     assert prefixed.json()["current_model_records"] == 0
     reread = await client.get("/api/v1/admin/embedding-settings", headers=auth_header(admin_id))
     assert reread.json()["query_prefix"] == "query: "
@@ -471,7 +524,10 @@ async def test_private_records_are_not_embedding_candidates():
     assert "embedding" not in StudentAcademicSnapshot.__table__.columns
     assert "embedding" not in CourseOffering.__table__.columns
     assert "embedding" not in CourseRule.__table__.columns
-    assert "embedding" in CampusKnowledgeRecord.__table__.columns
+    assert "embedding" not in CampusKnowledgeRecord.__table__.columns
+    assert "embedding_384" in CampusKnowledgeRecord.__table__.columns
+    assert "embedding_768" in CampusKnowledgeRecord.__table__.columns
+    assert "embedding_1536" in CampusKnowledgeRecord.__table__.columns
     assert "status" in CampusIngestionJob.__table__.columns
     assert "phase" in CampusIngestionJob.__table__.columns
     assert "provider" in KnowledgeEmbeddingSettings.__table__.columns
