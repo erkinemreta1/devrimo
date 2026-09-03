@@ -66,26 +66,30 @@ class ChatTelemetry {
   private requestStartedAt: number | null = null;
   private streamError: ChatStreamError | null = null;
 
-  readonly transport = new AssistantChatTransport({
-    api: "/api/chat",
-    prepareSendMessagesRequest: ({ id, messages }) => {
-      const latestMessage = messages.at(-1);
-      const textLength = latestMessage?.parts.reduce(
-        (total, part) => total + (part.type === "text" ? part.text.length : 0),
-        0,
-      ) ?? 0;
-      const attachmentCount = latestMessage?.parts.filter((part) => part.type === "file").length ?? 0;
-      this.requestStartedAt = Date.now();
-      this.streamError = null;
-      captureProductEvent("chat_message_sent", {
-        conversation_type: id ? "existing" : "new",
-        message_position: messages.length,
-        text_length: textLength,
-        attachment_count: attachmentCount,
-      });
-      return { body: { id, messages } };
-    },
-  });
+  readonly transport: AssistantChatTransport<UIMessage>;
+
+  constructor() {
+    this.transport = new AssistantChatTransport({
+      api: "/api/chat",
+      prepareSendMessagesRequest: ({ id, messages }) => {
+        const latestMessage = messages.at(-1);
+        const textLength = latestMessage?.parts.reduce(
+          (total, part) => total + (part.type === "text" ? part.text.length : 0),
+          0,
+        ) ?? 0;
+        const attachmentCount = latestMessage?.parts.filter((part) => part.type === "file").length ?? 0;
+        this.requestStartedAt = Date.now();
+        this.streamError = null;
+        captureProductEvent("chat_message_sent", {
+          conversation_type: id ? "existing" : "new",
+          message_position: messages.length,
+          text_length: textLength,
+          attachment_count: attachmentCount,
+        });
+        return { body: { id, messages } };
+      },
+    });
+  }
 
   finishDuration() {
     const startedAt = this.requestStartedAt;

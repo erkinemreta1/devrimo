@@ -200,3 +200,9 @@ async def sync_student_context_from_sais(user_id: UUID) -> bool:
             await _apply_student_info(db, user_id, student_info)
     logger.info("student_context_synced", user_id=str(user_id))
     return True
+
+
+async def sync_planning_snapshot_from_sais(user_id: UUID, term: str) -> bool:
+    """Refresh the existing deterministic planner without starting an agent run."""
+    async with _campus_session(user_id) as connected:
+        return await refresh_from_sais(user_id, term, connected)

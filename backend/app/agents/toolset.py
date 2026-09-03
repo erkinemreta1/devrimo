@@ -32,7 +32,10 @@ logger = get_logger(__name__)
 
 TOOLKIT_INSTRUCTIONS = {
     "sais": "Use for the student's private schedule, transcript, CGPA, and SAIS announcements.",
-    "course_info": "Use for official catalog, prerequisite, replacement, and curriculum questions.",
+    "course_info": (
+        "Use for official catalog, prerequisite, replacement, and curriculum questions. "
+        "Use the first-party plan_semester tool for offering eligibility and schedule optimization."
+    ),
     "odtuclass": "Use for enrolled-course announcements, syllabi, labs, and assignment deadlines.",
     "webmail": "Use only for explicit mail requests; send and reply always require confirmation.",
 }

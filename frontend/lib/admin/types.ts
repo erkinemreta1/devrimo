@@ -16,6 +16,18 @@ export type Overview = {
   campus_connected: number;
   agents: Record<string, number>;
   resident_agents: number;
+  usage: {
+    runs: number;
+    input_tokens: number;
+    output_tokens: number;
+    total_tokens: number;
+    last_24h_tokens: number;
+    last_7d_tokens: number;
+    estimated_cost_usd: number;
+    primary_model_tokens: number;
+    compression_tokens: number;
+    learning_tokens: number;
+  };
   attention: Array<{
     user_id: string;
     email: string | null;

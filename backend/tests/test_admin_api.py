@@ -9,6 +9,28 @@ from app.db.session import SessionLocal
 from tests.conftest import auth_header, new_user_id
 
 
+async def test_admin_overview_reports_zero_usage_before_the_first_agent_run(client, monkeypatch):
+    user_id = new_user_id()
+    monkeypatch.setattr(get_settings(), "admin_bootstrap_user_ids", str(user_id))
+    await client.get("/api/v1/profile", headers=auth_header(user_id))
+
+    response = await client.get("/api/v1/admin/overview", headers=auth_header(user_id))
+
+    assert response.status_code == 200, response.text
+    assert response.json()["usage"] == {
+        "runs": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "last_24h_tokens": 0,
+        "last_7d_tokens": 0,
+        "estimated_cost_usd": 0.0,
+        "primary_model_tokens": 0,
+        "compression_tokens": 0,
+        "learning_tokens": 0,
+    }
+
+
 async def test_non_admin_is_denied_and_bootstrap_gets_all_permissions(client, monkeypatch):
     user_id = new_user_id()
     response = await client.get("/api/v1/admin/me", headers=auth_header(user_id))

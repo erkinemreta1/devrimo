@@ -9,14 +9,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user
 from app.auth.jwt import AuthenticatedUser
-from app.db.models import StudentContext, UserPreference, UserUpdateState
+from app.db.models import StudentAcademicSnapshot, StudentContext, UserPreference, UserUpdateState
 from app.db.session import get_db
+from app.logging import get_logger
 from app.planning.groups import get_course_group
+from app.planning.mcp_bridge import sync_planning_snapshot_from_sais
 from app.planning.service import SemesterPlanRequest, plan_semester
 from app.student import service
 from app.student.updates import get_updates
 
 router = APIRouter()
+logger = get_logger(__name__)
 
 
 class ContextIn(BaseModel):
@@ -164,6 +167,17 @@ async def semester_plan(
     user: AuthenticatedUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
+    snapshot = await db.get(StudentAcademicSnapshot, (user.id, body.term))
+    if snapshot is None:
+        try:
+            if await sync_planning_snapshot_from_sais(user.id, body.term):
+                # The refresh commits in a separate short-lived session. End
+                # this read transaction so the planner sees the new snapshot.
+                await db.rollback()
+        except Exception as exc:
+            # Preserve the planner's established needs_academic_snapshot
+            # response when SAIS is disconnected or temporarily unavailable.
+            logger.warning("planning_snapshot_sync_failed", user_id=str(user.id), error=str(exc))
     return await plan_semester(db, user.id, body)
 
 

@@ -9,13 +9,7 @@ import { File } from "@/components/file";
 import { ThreadFollowupSuggestions } from "@/components/follow-up-suggestions.aui";
 import { Image as AssistantImage } from "@/components/image";
 import { MarkdownText } from "@/components/markdown-text";
-import {
-  Reasoning,
-  ReasoningContent,
-  ReasoningRoot,
-  ReasoningText,
-  ReasoningTrigger,
-} from "@/components/reasoning.aui";
+import { Reasoning, ReasoningContent, ReasoningRoot, ReasoningText, ReasoningTrigger } from "@/components/reasoning.aui";
 import { ToolFallback } from "@/components/tool-fallback.aui";
 import {
   ToolGroupContent,
@@ -58,13 +52,7 @@ import {
   RefreshCwIcon,
   SquareIcon,
 } from "lucide-react";
-import {
-  createContext,
-  useContext,
-  type ComponentType,
-  type FC,
-  type PropsWithChildren,
-} from "react";
+import { createContext, useContext, type ComponentType, type FC, type PropsWithChildren } from "react";
 
 export type ThreadGroupPart = MessagePrimitive.GroupedParts.GroupPart;
 
@@ -366,12 +354,8 @@ const AssistantMessage: FC = () => {
                 );
               case "indicator":
                 return (
-                  <span
-                    data-slot="aui_assistant-message-indicator"
-                    className="animate-pulse font-sans"
-                    aria-label="Assistant is working"
-                  >
-                    {"●"}
+                  <span data-slot="aui_assistant-message-indicator" className="inline-flex gap-1 py-2" role="status" aria-label="Assistant is working">
+                    {[0, 1, 2].map((index) => <span key={index} className="size-1.5 animate-bounce rounded-full bg-muted-foreground motion-reduce:animate-none" style={{ animationDelay: `${index * 120}ms` }} />)}
                   </span>
                 );
               default:

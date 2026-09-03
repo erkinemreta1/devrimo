@@ -71,9 +71,12 @@ def _tool_name(event) -> str | None:
 
 def _tool_server(tool_name: str | None) -> str | None:
     """The campus server a prefixed tool belongs to (``sais_get_transcript`` -> ``sais``)."""
-    if not tool_name or "_" not in tool_name:
+    if not tool_name:
         return None
-    return tool_name.split("_", 1)[0]
+    for server in ("course_info", "odtuclass", "webmail", "sais"):
+        if tool_name.startswith(f"{server}_"):
+            return server
+    return None
 
 
 def _tool_error_detail(event) -> str:

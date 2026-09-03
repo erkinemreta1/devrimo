@@ -67,6 +67,117 @@ def _scope(principal: AdminPrincipal):
     return AccountDirectory.organization_id == principal.organization_id if principal.organization_id else text("1=1")
 
 
+async def _token_usage(principal: AdminPrincipal, db: AsyncSession) -> dict:
+    """Aggregate Agno run metrics without loading prompts or responses."""
+    dialect = db.bind.dialect.name if db.bind is not None else "sqlite"
+    table = "ai.agno_runs" if dialect == "postgresql" else "agno_runs"
+    if dialect == "postgresql":
+        table_exists = bool(await db.scalar(text("SELECT to_regclass('ai.agno_runs') IS NOT NULL")))
+    else:
+        table_exists = bool(
+            await db.scalar(
+                text("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'agno_runs'")
+            )
+        )
+    if not table_exists:
+        return {
+            "runs": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+            "last_24h_tokens": 0,
+            "last_7d_tokens": 0,
+            "estimated_cost_usd": 0.0,
+            "primary_model_tokens": 0,
+            "compression_tokens": 0,
+            "learning_tokens": 0,
+        }
+    if dialect == "postgresql":
+        metric = lambda key: f"COALESCE(CAST(run_data -> 'metrics' ->> '{key}' AS BIGINT), 0)"  # noqa: E731
+    else:
+        metric = lambda key: f"COALESCE(CAST(json_extract(run_data, '$.metrics.{key}') AS BIGINT), 0)"  # noqa: E731
+
+    organization_filter = ""
+    params: dict[str, object] = {
+        "day_cutoff": int(datetime.now(UTC).timestamp()) - 86_400,
+        "week_cutoff": int(datetime.now(UTC).timestamp()) - 604_800,
+    }
+    if principal.organization_id is not None:
+        organization_filter = (
+            "WHERE EXISTS (SELECT 1 FROM account_directory ad "
+            "WHERE replace(CAST(ad.user_id AS TEXT), '-', '') = replace(CAST(r.user_id AS TEXT), '-', '') "
+            "AND CAST(ad.organization_id AS TEXT) = :organization_id)"
+        )
+        params["organization_id"] = str(principal.organization_id)
+
+    input_tokens = metric("input_tokens")
+    output_tokens = metric("output_tokens")
+    # Some providers omit total_tokens while still reporting both components.
+    total_tokens = f"({input_tokens} + {output_tokens})"
+    row = (
+        await db.execute(
+            text(
+                f"""
+                SELECT
+                    COUNT(*) AS runs,
+                    COALESCE(SUM({input_tokens}), 0) AS input_tokens,
+                    COALESCE(SUM({output_tokens}), 0) AS output_tokens,
+                    COALESCE(SUM({total_tokens}), 0) AS total_tokens,
+                    COALESCE(SUM(CASE WHEN created_at >= :day_cutoff THEN {total_tokens} ELSE 0 END), 0) AS day_tokens,
+                    COALESCE(SUM(CASE WHEN created_at >= :week_cutoff THEN {total_tokens} ELSE 0 END), 0) AS week_tokens
+                FROM {table} r
+                {organization_filter}
+                """
+            ),
+            params,
+        )
+    ).one()
+    if dialect == "postgresql":
+        role_source = (
+            "JOIN LATERAL jsonb_each(COALESCE((r.run_data::jsonb) -> 'metrics' -> 'details', '{}'::jsonb)) "
+            "role(key, value) ON TRUE JOIN LATERAL jsonb_array_elements(role.value) entry(value) ON TRUE"
+        )
+        role_input = "COALESCE(CAST(entry.value ->> 'input_tokens' AS BIGINT), 0)"
+        role_output = "COALESCE(CAST(entry.value ->> 'output_tokens' AS BIGINT), 0)"
+    else:
+        role_source = (
+            "JOIN json_each(json_extract(r.run_data, '$.metrics.details')) role "
+            "JOIN json_each(role.value) entry"
+        )
+        role_input = "COALESCE(CAST(json_extract(entry.value, '$.input_tokens') AS BIGINT), 0)"
+        role_output = "COALESCE(CAST(json_extract(entry.value, '$.output_tokens') AS BIGINT), 0)"
+    role_rows = (
+        await db.execute(
+            text(
+                f"""
+                SELECT role.key, COALESCE(SUM({role_input} + {role_output}), 0) AS tokens
+                FROM {table} r {role_source}
+                {organization_filter}
+                GROUP BY role.key
+                """
+            ),
+            params,
+        )
+    ).all()
+    tokens_by_role = {str(role): int(tokens or 0) for role, tokens in role_rows}
+    runtime = await get_runtime_config(db)
+    estimated_cost = float(row.input_tokens or 0) * runtime.input_token_price + float(
+        row.output_tokens or 0
+    ) * runtime.output_token_price
+    return {
+        "runs": int(row.runs or 0),
+        "input_tokens": int(row.input_tokens or 0),
+        "output_tokens": int(row.output_tokens or 0),
+        "total_tokens": int(row.total_tokens or 0),
+        "last_24h_tokens": int(row.day_tokens or 0),
+        "last_7d_tokens": int(row.week_tokens or 0),
+        "estimated_cost_usd": round(estimated_cost, 6),
+        "primary_model_tokens": tokens_by_role.get("model", 0),
+        "compression_tokens": tokens_by_role.get("compression_model", 0),
+        "learning_tokens": tokens_by_role.get("learning_model", 0),
+    }
+
+
 @router.get("/me")
 async def admin_me(principal: AdminPrincipal = Depends(get_admin_principal)) -> dict:
     return {
@@ -123,6 +234,7 @@ async def overview(
             .limit(8)
         )
     ).all()
+    usage = await _token_usage(principal, db)
     return {
         "users": totals[0] or 0,
         "active_users": totals[1] or 0,
@@ -130,6 +242,7 @@ async def overview(
         "campus_connected": totals[3] or 0,
         "agents": statuses,
         "resident_agents": get_pool().size(),
+        "usage": usage,
         "attention": [
             {
                 "user_id": str(row[0]),

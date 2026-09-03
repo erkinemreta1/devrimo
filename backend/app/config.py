@@ -38,7 +38,7 @@ class Settings(BaseSettings):
     agent_history_runs: int = 10
     scholar_history_runs: int = 3
     agent_tool_call_limit: int = 10
-    agent_compress_tool_results: bool = True
+    agent_compress_tool_results: bool = False
     agent_compress_tool_results_limit: int = 3
     agent_learning_enabled: bool = True
     agent_retries: int = 2

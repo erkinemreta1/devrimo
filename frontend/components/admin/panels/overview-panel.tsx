@@ -1,11 +1,14 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   BotIcon,
   Building2Icon,
   CheckCircle2Icon,
   ClipboardCheckIcon,
+  CoinsIcon,
+  CpuIcon,
   RefreshCwIcon,
   SparklesIcon,
   UsersIcon,
@@ -49,6 +52,9 @@ export function OverviewPanel({ title, description }: { title: string; descripti
 
 function OverviewContent({ data }: { data: Overview }) {
   const { locale, pick } = useLocale();
+  const number = new Intl.NumberFormat(locale === "tr" ? "tr-TR" : "en-US");
+  const compact = new Intl.NumberFormat(locale === "tr" ? "tr-TR" : "en-US", { notation: "compact", maximumFractionDigits: 1 });
+  const usd = new Intl.NumberFormat(locale === "tr" ? "tr-TR" : "en-US", { style: "currency", currency: "USD", maximumFractionDigits: 4 });
   const metrics = [
     { label: pick({ tr: "Toplam hesap", en: "Total accounts" }), value: data.users, icon: UsersIcon, hint: pick({ tr: "Dizindeki tüm etkin kayıtlar", en: "All current directory records" }) },
     { label: pick({ tr: "Aktif hesap", en: "Active accounts" }), value: data.active_users, icon: CheckCircle2Icon, hint: pick({ tr: `${data.users ? Math.round((data.active_users / data.users) * 100) : 0}% etkin`, en: `${data.users ? Math.round((data.active_users / data.users) * 100) : 0}% active` }) },
@@ -76,6 +82,29 @@ function OverviewContent({ data }: { data: Overview }) {
           </Card>
         ))}
       </div>
+
+      <Card className="overflow-hidden border-primary/18 bg-primary/[0.045] ring-1 ring-primary/8">
+        <CardHeader className="border-b border-primary/10">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <CardTitle className="flex items-center gap-2"><CpuIcon className="size-4 text-primary" />{pick({ tr: "Token kullanımı", en: "Token usage" })}</CardTitle>
+              <CardDescription>{pick({ tr: "Agno çalışma metriklerinden hesaplanır; mesaj veya öğrenci içeriği okunmaz.", en: "Calculated from Agno run metrics; no messages or student content are read." })}</CardDescription>
+            </div>
+            <span className="rounded-lg border bg-background/70 px-2.5 py-1 text-xs font-medium tabular-nums">{number.format(data.usage.runs)} {pick({ tr: "çalışma", en: "runs" })}</span>
+          </div>
+        </CardHeader>
+        <CardContent className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <UsageMetric label={pick({ tr: "Toplam token", en: "Total tokens" })} value={number.format(data.usage.total_tokens)} hint={`${compact.format(data.usage.input_tokens)} ${pick({ tr: "girdi", en: "input" })} · ${compact.format(data.usage.output_tokens)} ${pick({ tr: "çıktı", en: "output" })}`} />
+          <UsageMetric label={pick({ tr: "Son 24 saat", en: "Last 24 hours" })} value={number.format(data.usage.last_24h_tokens)} hint={pick({ tr: "Tüm ajan çalışmaları", en: "All agent runs" })} />
+          <UsageMetric label={pick({ tr: "Son 7 gün", en: "Last 7 days" })} value={number.format(data.usage.last_7d_tokens)} hint={pick({ tr: "Kayan zaman aralığı", en: "Rolling time window" })} />
+          <UsageMetric label={pick({ tr: "Tahmini maliyet", en: "Estimated cost" })} value={usd.format(data.usage.estimated_cost_usd)} hint={pick({ tr: "Paneldeki güncel token fiyatlarıyla", en: "Using current token prices" })} icon={<CoinsIcon className="size-4 text-primary" />} />
+        </CardContent>
+        <div className="grid gap-px border-t border-primary/10 bg-border/70 sm:grid-cols-3">
+          <UsageBreakdown label={pick({ tr: "Ana model", en: "Primary model" })} value={number.format(data.usage.primary_model_tokens)} />
+          <UsageBreakdown label={pick({ tr: "Sıkıştırma ek yükü", en: "Compression overhead" })} value={number.format(data.usage.compression_tokens)} />
+          <UsageBreakdown label={pick({ tr: "Öğrenme ek yükü", en: "Learning overhead" })} value={number.format(data.usage.learning_tokens)} />
+        </div>
+      </Card>
 
       <div className="grid gap-4 xl:grid-cols-[1.4fr_1fr]">
         <Card className="surface-raised border-0 ring-1 ring-foreground/8">
@@ -131,4 +160,12 @@ function OverviewContent({ data }: { data: Overview }) {
       </div>
     </div>
   );
+}
+
+function UsageMetric({ label, value, hint, icon }: { label: string; value: string; hint: string; icon?: ReactNode }) {
+  return <div className="rounded-xl border bg-background/65 p-4"><div className="flex items-center justify-between gap-2"><p className="text-xs font-medium text-muted-foreground">{label}</p>{icon}</div><p className="mt-2 text-2xl font-semibold tracking-tight tabular-nums">{value}</p><p className="mt-1 text-xs text-muted-foreground">{hint}</p></div>;
+}
+
+function UsageBreakdown({ label, value }: { label: string; value: string }) {
+  return <div className="flex items-center justify-between gap-3 bg-background/72 px-4 py-3 text-xs"><span className="text-muted-foreground">{label}</span><span className="font-semibold tabular-nums">{value}</span></div>;
 }
