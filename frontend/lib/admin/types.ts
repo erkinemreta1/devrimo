@@ -174,6 +174,8 @@ export type EmbeddingSettings = {
   base_url: string | null;
   dimensions: number;
   batch_size: number;
+  query_prefix: string;
+  document_prefix: string;
   has_api_key: boolean;
   has_database_override: boolean;
   model_label: string | null;
@@ -205,10 +207,15 @@ export type IngestionJob = {
 
 export type KnowledgeSearchResult = {
   id: string;
+  document_id: string;
   type: string;
   title: string;
   summary: string | null;
   content: string;
+  section: string | null;
+  chunk_index: number;
+  chunk_count: number;
+  page_number: number | null;
   url: string | null;
   language: string | null;
   starts_at: string | null;

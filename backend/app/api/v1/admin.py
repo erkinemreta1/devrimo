@@ -69,17 +69,8 @@ def _scope(principal: AdminPrincipal):
 
 async def _token_usage(principal: AdminPrincipal, db: AsyncSession) -> dict:
     """Aggregate Agno run metrics without loading prompts or responses."""
-    dialect = db.bind.dialect.name if db.bind is not None else "sqlite"
-    table = "ai.agno_runs" if dialect == "postgresql" else "agno_runs"
-    if dialect == "postgresql":
-        table_exists = bool(await db.scalar(text("SELECT to_regclass('ai.agno_runs') IS NOT NULL")))
-    else:
-        table_exists = bool(
-            await db.scalar(
-                text("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'agno_runs'")
-            )
-        )
-    if not table_exists:
+    table = "ai.agno_runs"
+    if not bool(await db.scalar(text("SELECT to_regclass('ai.agno_runs') IS NOT NULL"))):
         return {
             "runs": 0,
             "input_tokens": 0,
@@ -92,10 +83,7 @@ async def _token_usage(principal: AdminPrincipal, db: AsyncSession) -> dict:
             "compression_tokens": 0,
             "learning_tokens": 0,
         }
-    if dialect == "postgresql":
-        metric = lambda key: f"COALESCE(CAST(run_data -> 'metrics' ->> '{key}' AS BIGINT), 0)"  # noqa: E731
-    else:
-        metric = lambda key: f"COALESCE(CAST(json_extract(run_data, '$.metrics.{key}') AS BIGINT), 0)"  # noqa: E731
+    metric = lambda key: f"COALESCE(CAST(run_data -> 'metrics' ->> '{key}' AS BIGINT), 0)"  # noqa: E731
 
     organization_filter = ""
     params: dict[str, object] = {
@@ -132,20 +120,12 @@ async def _token_usage(principal: AdminPrincipal, db: AsyncSession) -> dict:
             params,
         )
     ).one()
-    if dialect == "postgresql":
-        role_source = (
-            "JOIN LATERAL jsonb_each(COALESCE((r.run_data::jsonb) -> 'metrics' -> 'details', '{}'::jsonb)) "
-            "role(key, value) ON TRUE JOIN LATERAL jsonb_array_elements(role.value) entry(value) ON TRUE"
-        )
-        role_input = "COALESCE(CAST(entry.value ->> 'input_tokens' AS BIGINT), 0)"
-        role_output = "COALESCE(CAST(entry.value ->> 'output_tokens' AS BIGINT), 0)"
-    else:
-        role_source = (
-            "JOIN json_each(json_extract(r.run_data, '$.metrics.details')) role "
-            "JOIN json_each(role.value) entry"
-        )
-        role_input = "COALESCE(CAST(json_extract(entry.value, '$.input_tokens') AS BIGINT), 0)"
-        role_output = "COALESCE(CAST(json_extract(entry.value, '$.output_tokens') AS BIGINT), 0)"
+    role_source = (
+        "JOIN LATERAL jsonb_each(COALESCE((r.run_data::jsonb) -> 'metrics' -> 'details', '{}'::jsonb)) "
+        "role(key, value) ON TRUE JOIN LATERAL jsonb_array_elements(role.value) entry(value) ON TRUE"
+    )
+    role_input = "COALESCE(CAST(entry.value ->> 'input_tokens' AS BIGINT), 0)"
+    role_output = "COALESCE(CAST(entry.value ->> 'output_tokens' AS BIGINT), 0)"
     role_rows = (
         await db.execute(
             text(

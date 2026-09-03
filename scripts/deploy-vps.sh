@@ -4,7 +4,6 @@ set -Eeuo pipefail
 DEPLOY_DIR="/opt/devrimo"
 BACKUP_DIR="$DEPLOY_DIR/.backups"
 RUNTIME_DIR="/var/lib/devrimo"
-DB_FILE="$RUNTIME_DIR/devrimo.db"
 RELEASE_ARCHIVE="${RELEASE_ARCHIVE:?RELEASE_ARCHIVE is required}"
 DEPLOY_SHA="${DEPLOY_SHA:?DEPLOY_SHA is required}"
 NODE_BIN="/opt/devrimo/node/bin"
@@ -16,7 +15,13 @@ flock -n 9 || { echo "Another Devrimo deployment is already running"; exit 1; }
 test -f "$RELEASE_ARCHIVE"
 test -f "$DEPLOY_DIR/backend/.env"
 test -f "$DEPLOY_DIR/frontend/.env.local"
-test -f "$DB_FILE"
+
+# The application connects through an async driver; pg_dump reaches the same
+# database through libpq, so only the driver suffix is dropped. tr strips any
+# surrounding quotes (octal escapes keep this line quote-free).
+DATABASE_URL="$(sed -n -e 's/^DATABASE_URL=//p' "$DEPLOY_DIR/backend/.env" | tail -1 | tr -d '\042\047')"
+test -n "$DATABASE_URL" || { echo "DATABASE_URL is not set in backend/.env"; exit 1; }
+PG_URL="${DATABASE_URL/+asyncpg/}"
 
 stamp="$(date -u +%Y%m%d-%H%M%S)"
 mkdir -p "$BACKUP_DIR"
@@ -31,7 +36,6 @@ tar -czf "$BACKUP_DIR/source-$stamp.tar.gz" \
   --exclude='./backend/.env' \
   --exclude='./backend/.campus-state' \
   --exclude='./backend/.agentos' \
-  --exclude='./backend/devrimo.db*' \
   --exclude='./node' \
   --exclude='./.npm' \
   --exclude='./.local' \
@@ -42,20 +46,10 @@ tar -czf "$BACKUP_DIR/source-$stamp.tar.gz" \
   -C "$DEPLOY_DIR" .
 chmod 600 "$BACKUP_DIR/source-$stamp.tar.gz"
 
-# SQLite's backup API produces a consistent snapshot even while the old API
-# process is still serving reads and writes.
-"$DEPLOY_DIR/backend/.venv/bin/python" - "$DB_FILE" "$BACKUP_DIR/devrimo.db-$stamp" <<'PY'
-import sqlite3
-import sys
-
-source = sqlite3.connect(sys.argv[1])
-destination = sqlite3.connect(sys.argv[2])
-with destination:
-    source.backup(destination)
-source.close()
-destination.close()
-PY
-chmod 600 "$BACKUP_DIR/devrimo.db-$stamp"
+# pg_dump takes a transactionally consistent snapshot while the old API process
+# keeps serving. The custom format restores with pg_restore and compresses.
+pg_dump --format=custom --no-owner --file="$BACKUP_DIR/devrimo-$stamp.dump" "$PG_URL"
+chmod 600 "$BACKUP_DIR/devrimo-$stamp.dump"
 
 stage_dir="$(mktemp -d "$DEPLOY_DIR/.release.XXXXXX")"
 trap 'rm -rf "$stage_dir"' EXIT
@@ -100,15 +94,21 @@ if ! bash -lc "cd '$DEPLOY_DIR/backend' && .venv/bin/python -m alembic upgrade h
   exit 1
 fi
 
+# The knowledge worker imports the same application modules as the API, so it
+# keeps serving the previous release from memory until it is restarted too.
+# Every long-running unit that loads this source tree belongs in this list.
 sudo /usr/bin/systemctl restart devrimo-api.service
 sudo /usr/bin/systemctl restart devrimo-web.service
+sudo /usr/bin/systemctl restart devrimo-knowledge-worker.service
 
 for attempt in {1..30}; do
   api_ok=false
   web_ok=false
+  worker_ok=false
   curl -fsS http://127.0.0.1:8000/health >/dev/null && api_ok=true
   curl -fsS -o /dev/null http://127.0.0.1:3000/ && web_ok=true
-  if "$api_ok" && "$web_ok"; then
+  systemctl is-active --quiet devrimo-knowledge-worker.service && worker_ok=true
+  if "$api_ok" && "$web_ok" && "$worker_ok"; then
     printf '%s\n' "$DEPLOY_SHA" > "$DEPLOY_DIR/.deployed-sha"
     rm -f "$RELEASE_ARCHIVE"
     echo "Devrimo deployment $DEPLOY_SHA is healthy"
@@ -119,5 +119,6 @@ done
 
 sudo /usr/bin/systemctl status devrimo-api.service --no-pager || true
 sudo /usr/bin/systemctl status devrimo-web.service --no-pager || true
-journalctl -u devrimo-api.service -u devrimo-web.service -n 100 --no-pager || true
+sudo /usr/bin/systemctl status devrimo-knowledge-worker.service --no-pager || true
+journalctl -u devrimo-api.service -u devrimo-web.service -u devrimo-knowledge-worker.service -n 100 --no-pager || true
 exit 1

@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.db.models import CampusIngestionJob, CampusKnowledgeRecord, CampusSource, CampusSourceRevision
 from app.knowledge.adapters import adapter_for
+from app.knowledge.chunking import chunk_records, embedding_text
 from app.knowledge.embeddings import EmbeddingConfig, embed_texts, get_embedding_config
 from app.knowledge.fetcher import FetchPolicy, fetch_document
 from app.knowledge.registry import REMOTE_KINDS
@@ -78,9 +79,8 @@ async def claim_job(db: AsyncSession, worker_id: str) -> CampusIngestionJob | No
         )
         .order_by(CampusIngestionJob.available_at, CampusIngestionJob.created_at)
         .limit(1)
+        .with_for_update(skip_locked=True)
     )
-    if db.get_bind().dialect.name == "postgresql":
-        statement = statement.with_for_update(skip_locked=True)
     job = (await db.execute(statement)).scalar_one_or_none()
     if job is None:
         return None
@@ -161,7 +161,7 @@ async def _load_records(source: CampusSource, revision: CampusSourceRevision) ->
             **revision.config.get("defaults", {}),
         },
     }
-    records = adapter_for(source.kind).parse(document, config)
+    records = chunk_records(adapter_for(source.kind).parse(document, config), config)
     if not records and not revision.config.get("allow_empty", False):
         raise ValueError("Adapter returned no records; existing records were preserved")
     return records, headers
@@ -181,7 +181,15 @@ async def process_job(db: AsyncSession, job: CampusIngestionJob) -> int:
                 )
             )
         ).scalars().all()
-        texts = [f"{row.title}\n{row.summary or ''}\n{row.content}"[:12000] for row in rows]
+        texts = [
+            embedding_text(
+                title=row.title,
+                summary=row.summary,
+                content=row.content,
+                metadata=row.metadata_json,
+            )
+            for row in rows
+        ]
         embeddings, config = await _embed_batches(db, job, source, texts)
         await _set_progress(db, job, "storing")
         for row, embedding in zip(rows, embeddings, strict=True):
@@ -211,7 +219,15 @@ async def process_job(db: AsyncSession, job: CampusIngestionJob) -> int:
         await db.commit()
         return 0
 
-    texts = [f"{record.title}\n{record.summary or ''}\n{record.content}"[:12000] for record in records]
+    texts = [
+        embedding_text(
+            title=record.title,
+            summary=record.summary,
+            content=record.content,
+            metadata=record.metadata,
+        )
+        for record in records
+    ]
     embeddings, config = await _embed_batches(db, job, source, texts)
     await _set_progress(db, job, "storing")
     now = datetime.now(UTC)

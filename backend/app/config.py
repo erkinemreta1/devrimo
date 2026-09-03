@@ -10,7 +10,9 @@ class Settings(BaseSettings):
     port: int = 8000
     cors_origins: str = "http://localhost:3000"
 
-    database_url: str = "sqlite+aiosqlite:///./devrimo.db"
+    # Retrieval depends on pgvector, pg_trgm and Postgres full-text search, so
+    # there is no second supported engine to fall back to.
+    database_url: str = "postgresql+asyncpg://devrimo:devrimo@localhost:5432/devrimo"
 
     supabase_url: str = ""
     supabase_jwt_secret: str = ""

@@ -6,6 +6,11 @@ services:
       POSTGRES_USER: devrimo
       POSTGRES_PASSWORD: devrimo
       POSTGRES_DB: devrimo
+    ports:
+      # Host-only. Retrieval is implemented in Postgres, so the test suite and
+      # local tooling need a real server to connect to; this must not be
+      # published beyond the loopback interface.
+      - "127.0.0.1:5432:5432"
     volumes:
       - devrimo-postgres:/var/lib/postgresql/data
     networks:

@@ -27,8 +27,7 @@ logger = get_logger(__name__)
 # Note that on Postgres these do not land beside the app's tables: `PostgresDb`
 # defaults to its own `ai` schema, while Alembic owns `public`. Same database,
 # two schemas — retention and backup policy has to name `ai` explicitly or it
-# will miss every conversation. On SQLite there is one namespace and the
-# prefix is the only separation.
+# will miss every conversation.
 _SESSION_TABLE = "agno_sessions"
 _RUNS_TABLE = "agno_runs"
 _MEMORY_TABLE = "agno_memories"
@@ -45,12 +44,6 @@ _LEARNINGS_TABLE = "agno_learnings"
 _SCHEDULES_TABLE = "agno_schedules"
 _SCHEDULE_RUNS_TABLE = "agno_schedule_runs"
 _APPROVALS_TABLE = "agno_approvals"
-
-
-def _sqlite_file(url: str) -> str:
-    """``sqlite+aiosqlite:///./devrimo.db`` -> ``./devrimo.db``."""
-    _, _, tail = url.partition(":///")
-    return tail or "devrimo.db"
 
 
 def _sync_postgres_url(url: str) -> str:
@@ -84,11 +77,6 @@ def get_agno_db() -> BaseDb:
         "schedule_runs_table": _SCHEDULE_RUNS_TABLE,
         "approvals_table": _APPROVALS_TABLE,
     }
-
-    if url.startswith("sqlite"):
-        from agno.db.sqlite import SqliteDb
-
-        return SqliteDb(db_file=_sqlite_file(url), **tables)
 
     from agno.db.postgres import PostgresDb
 

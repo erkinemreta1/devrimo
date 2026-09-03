@@ -36,6 +36,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { adminGet, adminMutate } from "@/lib/admin/client";
 import type {
   AdminPrincipal,
+  BatchSourceInput,
   CourseGroup,
   EmbeddingSettings,
   IngestionJob,
@@ -195,7 +196,7 @@ function KnowledgeSearchLab() {
         {search.data.items.length ? search.data.items.map((item, index) => <div key={item.id} className="rounded-xl border bg-background/55 p-4">
           <div className="flex items-start gap-4">
             <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center gap-2"><Badge variant="secondary">#{index + 1}</Badge><Badge variant="outline">{item.source}</Badge><Badge variant="outline">{item.type.replaceAll("_", " ")}</Badge>{item.language ? <Badge variant="outline">{item.language}</Badge> : null}</div>
+              <div className="flex flex-wrap items-center gap-2"><Badge variant="secondary">#{index + 1}</Badge><Badge variant="outline">{item.source}</Badge><Badge variant="outline">{item.type.replaceAll("_", " ")}</Badge>{item.language ? <Badge variant="outline">{item.language}</Badge> : null}{item.section ? <Badge variant="outline">{item.section}</Badge> : null}{item.chunk_count > 1 ? <Badge variant="outline">{pick({ tr: `parça ${item.chunk_index + 1}/${item.chunk_count}`, en: `chunk ${item.chunk_index + 1}/${item.chunk_count}` })}</Badge> : null}{item.page_number ? <Badge variant="outline">{pick({ tr: `sayfa ${item.page_number}`, en: `page ${item.page_number}` })}</Badge> : null}</div>
               <h3 className="mt-2 font-semibold">{item.title}</h3>
               <p className="mt-1 max-h-24 overflow-hidden whitespace-pre-line text-sm leading-6 text-muted-foreground">{item.summary || item.content}</p>
               <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">{item.source_last_success_at ? <span>{pick({ tr: "Kaynak güncellendi", en: "Source updated" })}: {formatDate(item.source_last_success_at, locale)}</span> : null}{item.url ? <a href={item.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 font-medium text-primary hover:underline">{pick({ tr: "Kaynağı aç", en: "Open source" })}<ExternalLinkIcon className="size-3" /></a> : null}</div>
@@ -210,7 +211,7 @@ function KnowledgeSearchLab() {
 
 function EmbeddingPanel(props: { settings?: EmbeddingSettings; jobs: IngestionJob[]; loading: boolean; canWrite: boolean; onDone: () => void }) {
   if (props.loading || !props.settings) return <Skeleton className="h-72 rounded-xl" />;
-  const settingsKey = [props.settings.provider, props.settings.model, props.settings.base_url, props.settings.dimensions, props.settings.batch_size, props.settings.has_api_key].join(":");
+  const settingsKey = [props.settings.provider, props.settings.model, props.settings.base_url, props.settings.dimensions, props.settings.batch_size, props.settings.query_prefix, props.settings.document_prefix, props.settings.has_api_key].join(":");
   return <EmbeddingPanelEditor key={settingsKey} settings={props.settings} jobs={props.jobs} canWrite={props.canWrite} onDone={props.onDone} />;
 }
 
@@ -221,6 +222,8 @@ function EmbeddingPanelEditor({ settings, jobs, canWrite, onDone }: { settings: 
   const [baseUrl, setBaseUrl] = useState(settings.base_url ?? "");
   const [dimensions, setDimensions] = useState(String(settings.dimensions));
   const [batchSize, setBatchSize] = useState(String(settings.batch_size));
+  const [queryPrefix, setQueryPrefix] = useState(settings.query_prefix);
+  const [documentPrefix, setDocumentPrefix] = useState(settings.document_prefix);
   const [apiKey, setApiKey] = useState("");
   const [dirty, setDirty] = useState(false);
 
@@ -231,6 +234,8 @@ function EmbeddingPanelEditor({ settings, jobs, canWrite, onDone }: { settings: 
       base_url: provider === "disabled" ? null : baseUrl,
       dimensions: Number(dimensions),
       batch_size: Number(batchSize),
+      query_prefix: queryPrefix,
+      document_prefix: documentPrefix,
       api_key: apiKey || null,
     }),
     onSuccess: () => { setApiKey(""); setDirty(false); toast.success(pick({ tr: "Embedding ayarları kaydedildi", en: "Embedding settings saved" })); onDone(); },
@@ -254,6 +259,8 @@ function EmbeddingPanelEditor({ settings, jobs, canWrite, onDone }: { settings: 
         <div className="space-y-2 lg:col-span-2"><Label>{pick({ tr: "Uç nokta", en: "Endpoint" })}</Label><Input value={baseUrl} disabled={!canWrite || provider === "disabled"} onChange={(event) => { setBaseUrl(event.target.value); setDirty(true); }} placeholder={provider === "local" ? "http://host.docker.internal:11434/v1" : "https://api.openai.com/v1"} /></div>
         <div className="space-y-2"><Label>{pick({ tr: "Boyut", en: "Dimensions" })}</Label><Input type="number" min={1} max={1536} value={dimensions} disabled={!canWrite || provider === "disabled"} onChange={(event) => { setDimensions(event.target.value); setDirty(true); }} /></div>
         <div className="space-y-2"><Label>{pick({ tr: "Paket boyutu", en: "Batch size" })}</Label><Input type="number" min={1} max={128} value={batchSize} disabled={!canWrite || provider === "disabled"} onChange={(event) => { setBatchSize(event.target.value); setDirty(true); }} /></div>
+        <div className="space-y-2 sm:col-span-2"><Label>{pick({ tr: "Sorgu ön eki", en: "Query prefix" })}</Label><Input value={queryPrefix} disabled={!canWrite || provider === "disabled"} onChange={(event) => { setQueryPrefix(event.target.value); setDirty(true); }} placeholder="query: " /><p className="text-xs text-muted-foreground">{pick({ tr: "Arama sorgusunun önüne eklenir. Sadece sorguları etkiler, mevcut vektörler geçerli kalır.", en: "Prepended to search queries only; stored vectors stay valid." })}</p></div>
+        <div className="space-y-2 sm:col-span-2 lg:col-span-3"><Label>{pick({ tr: "Belge ön eki", en: "Document prefix" })}</Label><Input value={documentPrefix} disabled={!canWrite || provider === "disabled"} onChange={(event) => { setDocumentPrefix(event.target.value); setDirty(true); }} placeholder="passage: " /><p className={documentPrefix === settings.document_prefix ? "text-xs text-muted-foreground" : "text-xs text-amber-600 dark:text-amber-500"}>{documentPrefix === settings.document_prefix ? pick({ tr: "Depolanan metinlerin önüne eklenir; asimetrik modeller bunu bekler.", en: "Prepended to stored passages; asymmetric models expect it." }) : pick({ tr: "Bu ön eki değiştirmek mevcut vektörleri geçersiz kılar; kaydettikten sonra yeniden işlemelisin.", en: "Changing this retires the stored vectors; re-embed after saving." })}</p></div>
         {provider === "remote" ? <div className="space-y-2 sm:col-span-2"><Label>{pick({ tr: "API anahtarı", en: "API key" })}</Label><Input type="password" value={apiKey} disabled={!canWrite} onChange={(event) => { setApiKey(event.target.value); setDirty(true); }} placeholder={settings?.has_api_key ? pick({ tr: "Kayıtlı anahtarı korumak için boş bırak", en: "Leave blank to keep the stored key" }) : pick({ tr: "Gerekli", en: "Required" })} /></div> : null}
         <div className="flex items-end gap-2 sm:col-span-2 lg:col-span-3"><Button disabled={!canWrite || !dirty || !valid || save.isPending} onClick={() => save.mutate()}><SaveIcon />{pick({ tr: "Ayarları kaydet", en: "Save settings" })}</Button><Button variant="outline" disabled={!canWrite || provider === "disabled" || reindex.isPending} onClick={() => reindex.mutate()}><RefreshCwIcon />{pick({ tr: "Mevcut kayıtları yeniden işle", en: "Re-embed existing records" })}</Button></div>
       </div>
@@ -456,36 +463,38 @@ function CreateSourceDialog({ open, onOpenChange, onDone }: { open: boolean; onO
 
   // Batch mode state
   const [batchJson, setBatchJson] = useState("");
-  const batchParsed = useMemo(() => {
-    if (!batchJson.trim()) return { items: [] as any[], error: null };
+  const batchParsed = (() => {
+    if (!batchJson.trim()) return { items: [] as BatchSourceInput[], error: null };
     try {
-      const parsed = JSON.parse(batchJson);
+      const parsed: unknown = JSON.parse(batchJson);
       if (!Array.isArray(parsed)) {
-        return { items: [], error: pick({ tr: "Girdi bir JSON dizisi [...] olmalıdır.", en: "Input must be a JSON array [...]." }) };
+        return { items: [] as BatchSourceInput[], error: pick({ tr: "Girdi bir JSON dizisi [...] olmalıdır.", en: "Input must be a JSON array [...]." }) };
       }
       if (parsed.length === 0) {
-        return { items: [], error: pick({ tr: "En az 1 kaynak gereklidir.", en: "At least 1 source is required." }) };
+        return { items: [] as BatchSourceInput[], error: pick({ tr: "En az 1 kaynak gereklidir.", en: "At least 1 source is required." }) };
       }
       if (parsed.length > 100) {
-        return { items: [], error: pick({ tr: "Tek seferde en fazla 100 kaynak eklenebilir.", en: "Maximum 100 sources per batch." }) };
+        return { items: [] as BatchSourceInput[], error: pick({ tr: "Tek seferde en fazla 100 kaynak eklenebilir.", en: "Maximum 100 sources per batch." }) };
       }
+      const items: BatchSourceInput[] = [];
       for (let i = 0; i < parsed.length; i++) {
-        const item = parsed[i];
-        if (!item || typeof item !== "object") {
-          return { items: [], error: `#${i + 1} ${pick({ tr: "kaynak geçerli bir nesne değil.", en: "source is not a valid object." })}` };
+        const item = asJsonObject(parsed[i]);
+        if (!item) {
+          return { items: [] as BatchSourceInput[], error: `#${i + 1} ${pick({ tr: "kaynak geçerli bir nesne değil.", en: "source is not a valid object." })}` };
         }
         if (!item.name || typeof item.name !== "string" || item.name.trim().length < 2) {
-          return { items: [], error: `#${i + 1} ${pick({ tr: "kaynağın geçerli bir adı olmalı (min 2 karakter).", en: "source must have a valid name (min 2 chars)." })}` };
+          return { items: [] as BatchSourceInput[], error: `#${i + 1} ${pick({ tr: "kaynağın geçerli bir adı olmalı (min 2 karakter).", en: "source must have a valid name (min 2 chars)." })}` };
         }
-        if (!item.kind || !SOURCE_KINDS.includes(item.kind)) {
-          return { items: [], error: `#${i + 1} ${pick({ tr: "kaynağın geçerli bir türü olmalı.", en: "source must have a valid kind." })}` };
+        if (typeof item.kind !== "string" || !SOURCE_KINDS.includes(item.kind as (typeof SOURCE_KINDS)[number])) {
+          return { items: [] as BatchSourceInput[], error: `#${i + 1} ${pick({ tr: "kaynağın geçerli bir türü olmalı.", en: "source must have a valid kind." })}` };
         }
+        items.push(item as BatchSourceInput);
       }
-      return { items: parsed, error: null };
+      return { items, error: null };
     } catch (err) {
-      return { items: [], error: err instanceof Error ? err.message : "Invalid JSON" };
+      return { items: [] as BatchSourceInput[], error: err instanceof Error ? err.message : "Invalid JSON" };
     }
-  }, [batchJson, pick]);
+  })();
 
   const singleMutation = useMutation({
     mutationFn: () => {

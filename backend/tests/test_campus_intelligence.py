@@ -1,3 +1,4 @@
+import hashlib
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
@@ -271,6 +272,31 @@ async def test_source_publish_ingest_search_and_personalized_updates(client, mon
     assert embedding_job["processed_records"] == 1
     assert embedding_job["embedded_records"] == 1
 
+    # The admin API is the only place these instructions can be set, so a save
+    # has to round-trip them: dropping them would silently retire every stored
+    # vector, because the document prefix is part of the model label.
+    prefixed = await client.put(
+        "/api/v1/admin/embedding-settings",
+        headers=auth_header(admin_id),
+        json={
+            "provider": "local",
+            "model": "local-test",
+            "base_url": "http://embedding:11434/v1",
+            "dimensions": 3,
+            "batch_size": 2,
+            "query_prefix": "query: ",
+            "document_prefix": "passage: ",
+        },
+    )
+    assert prefixed.status_code == 200, prefixed.text
+    assert prefixed.json()["query_prefix"] == "query: "
+    assert prefixed.json()["document_prefix"] == "passage: "
+    assert prefixed.json()["model_label"] != "local:local-test:3"
+    assert prefixed.json()["current_model_records"] == 0
+    reread = await client.get("/api/v1/admin/embedding-settings", headers=auth_header(admin_id))
+    assert reread.json()["query_prefix"] == "query: "
+    assert reread.json()["document_prefix"] == "passage: "
+
 
 async def test_knowledge_retrieval_is_scoped_to_organization():
     first_org = Organization(id=uuid4(), slug="first-campus", name="First Campus")
@@ -329,18 +355,13 @@ async def test_knowledge_retrieval_is_scoped_to_organization():
         content_hash="2" * 64,
     )
     async with SessionLocal() as db:
-        db.add_all(
-            [
-                first_org,
-                second_org,
-                first_source,
-                second_source,
-                first_revision,
-                second_revision,
-                first_record,
-                second_record,
-            ]
-        )
+        db.add_all([first_org, second_org])
+        await db.flush()
+        db.add_all([first_source, second_source])
+        await db.flush()
+        db.add_all([first_revision, second_revision])
+        await db.flush()
+        db.add_all([first_record, second_record])
         await db.commit()
 
         first_results = await search_knowledge(db, "tenant boundary", organization_id=first_org.id)
@@ -706,3 +727,80 @@ async def test_batch_publish_sources(client, monkeypatch) -> None:
     assert len(mixed_data["failed"]) == 1
     assert mixed_data["failed"][0]["source_id"] == non_existent_id
 
+
+async def _publish_turkish_records(contents: dict[str, str]) -> Organization:
+    """Index one record per entry, keyed by external id, and return the org."""
+    org = Organization(id=uuid4(), slug=f"tr-{uuid4().hex[:8]}", name="Turkish campus")
+    source = CampusSource(
+        id=uuid4(),
+        organization_id=org.id,
+        name="Turkish announcements",
+        kind="curated",
+        status="published",
+        enabled=True,
+    )
+    revision = CampusSourceRevision(
+        id=uuid4(), source_id=source.id, revision=1, status="published", config={}
+    )
+    records = [
+        CampusKnowledgeRecord(
+            source_id=source.id,
+            source_revision_id=revision.id,
+            external_id=external_id,
+            record_type="announcement",
+            title=content.split(".")[0],
+            content=content,
+            language="tr",
+            content_hash=hashlib.sha256(external_id.encode()).hexdigest(),
+        )
+        for external_id, content in contents.items()
+    ]
+    async with SessionLocal() as db:
+        db.add(org)
+        await db.flush()
+        db.add(source)
+        await db.flush()
+        db.add(revision)
+        await db.flush()
+        db.add_all(records)
+        await db.commit()
+    return org
+
+
+async def test_turkish_search_matches_across_inflection_and_case():
+    """Turkish is agglutinative and its dotted/dotless I breaks naive lowering.
+
+    Both are the database's job here: Postgres' Turkish snowball configuration
+    handles the case folding and most suffixes, and the trigram index covers the
+    bare-noun forms Snowball over-stems.
+    """
+    org = await _publish_turkish_records(
+        {
+            "library": "Kütüphaneye yeni kitaplar geldi ve çalışma saatleri uzatıldı.",
+            "permit": "İZİN BELGESİ başvuruları bu hafta içinde tamamlanmalıdır.",
+            "dorm": "Yurtta kalan öğrenciler için yemekhane menüsü güncellendi.",
+            "unrelated": "Mezuniyet töreni için akademik kıyafet dağıtımı yapılacaktır.",
+        }
+    )
+    async with SessionLocal() as db:
+        for query, expected in (
+            ("kütüphane", "library"),
+            ("kütüphanenin", "library"),
+            ("izin", "permit"),
+            ("yurt", "dorm"),
+        ):
+            results = await search_knowledge(db, query, organization_id=org.id, limit=4)
+            assert results, f"{query!r} returned nothing"
+            assert results[0]["document_id"] == expected, f"{query!r} -> {results[0]['document_id']}"
+
+
+async def test_search_ranks_by_relevance_not_by_scan_order():
+    """Every candidate must be reachable, regardless of insertion order."""
+    org = await _publish_turkish_records(
+        {f"filler-{index}": f"Genel duyuru metni numara {index}." for index in range(40)}
+        | {"target": "Burs başvurusu sonuçları öğrenci işleri tarafından açıklandı."}
+    )
+    async with SessionLocal() as db:
+        results = await search_knowledge(db, "burs başvurusu", organization_id=org.id, limit=5)
+        assert results
+        assert results[0]["document_id"] == "target"

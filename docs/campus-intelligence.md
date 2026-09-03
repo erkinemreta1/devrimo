@@ -9,12 +9,18 @@ deterministic decisions, and protected data.
 - The API serves student and administrator endpoints and exposes five broad
   Scholar tools: search campus knowledge, read an indexed page, plan a semester,
   reveal an eligible course group, and calculate arithmetic.
-- `knowledge-worker` schedules and claims durable ingestion jobs. PostgreSQL
-  workers use `SKIP LOCKED`, so more replicas can be added without duplicate
-  claims. Retries end in a visible dead-letter state.
-- PostgreSQL is the system of record. Weighted full-text search is always used;
-  pgvector/HNSW is an optional secondary ranker, never a separate source of
-  truth. SQLite has a deterministic fallback for tests.
+- `knowledge-worker` schedules and claims durable ingestion jobs with
+  `SKIP LOCKED`, so more replicas can be added without duplicate claims.
+  Retries end in a visible dead-letter state.
+- PostgreSQL is the system of record and the only supported engine: retrieval
+  is built from three of its indexes and cannot be expressed without them.
+  Search fuses, by Reciprocal Rank Fusion in a single statement:
+  - a GIN-indexed `tsvector` built with Postgres' Turkish (or English)
+    Snowball configuration, which stems and folds Turkish's dotted/dotless I;
+  - a GIN trigram index (`pg_trgm` word similarity), which covers the
+    agglutinative bare-noun forms Snowball over-stems — "kütüphane" against a
+    passage containing "kütüphaneye" scores ~0.9, an unrelated passage ~0.0;
+  - pgvector cosine distance over an HNSW index for semantic matching.
 
 ## Source lifecycle
 
@@ -31,6 +37,13 @@ exact host allowlist, checks DNS results, blocks private/reserved addresses,
 revalidates every redirect, observes robots.txt, applies time and size limits,
 and uses conditional requests when the origin supports them.
 
+Long canonical records are split at headings, paragraphs, and sentence
+boundaries into deterministic chunks of roughly 450 tokens. Each chunk keeps
+its document, section, page, and ordinal metadata. A small tail from the prior
+chunk is used only as embedding context, not duplicated in stored source text.
+`chunk_max_chars` and `chunk_context_chars` may be set on a source revision
+within validated limits; the defaults are 1800 and 240 characters.
+
 An empty parse fails closed: it does not erase the previous good snapshot.
 Successful runs hash normalized records, preserve unchanged rows, replace
 changed rows, and tombstone records that disappeared. Every answer carries its
@@ -39,15 +52,20 @@ source URL, retrieval time, effective time when known, and freshness state.
 ## Retrieval and conflicts
 
 Queries first apply hard filters such as audience, department, degree level,
-term, and validity window. Lexical and optional semantic ranks are then fused.
+term, and validity window. Full-text and current-model semantic candidates are
+retrieved independently, then combined with reciprocal-rank fusion. This keeps
+their score scales independent and lets PostgreSQL use both its GIN and cosine
+HNSW indexes. A minimum semantic similarity rejects unrelated vector matches,
+and document-level deduplication prevents one long page from filling the result
+set with its own chunks.
 Canonical public text is the only content that may be embedded. Student
 profiles, transcripts, schedules, email facts, group links, and raw tool output
 are excluded from embeddings.
 
 Source priority and freshness resolve ordinary conflicts. When authoritative
 sources still disagree, retrieval returns the conflict instead of silently
-choosing one. `read_campus_page` reads only the stored indexed revision; it is
-not an unrestricted web browser.
+choosing one. `read_campus_page` reconstructs all ordered chunks of the stored
+indexed document; it is not an unrestricted web browser.
 
 ## Student context and updates
 

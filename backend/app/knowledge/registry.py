@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import CampusIngestionJob, CampusSource, CampusSourceRevision
 from app.knowledge.adapters import adapter_for
+from app.knowledge.chunking import chunk_records, validate_chunk_config
 from app.knowledge.fetcher import FetchPolicy, fetch_document
 from app.knowledge.types import ParsedRecord
 
@@ -32,6 +33,7 @@ def validate_source(source: CampusSource, config: dict) -> dict:
         errors.append("schedule_seconds must be at least 300")
     if source.kind in {"curated", "email_facts"} and not isinstance(config.get("records", []), list):
         errors.append("config.records must be a list")
+    errors.extend(validate_chunk_config(config))
     return {"ok": not errors, "errors": errors, "warnings": warnings}
 
 
@@ -126,7 +128,7 @@ async def preview_revision(source: CampusSource, revision: CampusSourceRevision)
             **revision.config.get("defaults", {}),
         },
     }
-    return adapter_for(source.kind).parse(document, config)
+    return chunk_records(adapter_for(source.kind).parse(document, config), config)
 
 
 async def publish_revision(

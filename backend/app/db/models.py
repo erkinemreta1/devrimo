@@ -19,6 +19,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -380,6 +381,12 @@ class KnowledgeEmbeddingSettings(Base):
     base_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     dimensions: Mapped[int] = mapped_column(Integer, default=1536, nullable=False)
     batch_size: Mapped[int] = mapped_column(Integer, default=32, nullable=False)
+    # Retrieval models are trained asymmetrically: a short question and the
+    # passage that answers it are embedded with different instructions. The
+    # exact strings are provider-specific ("query: "/"passage: " for E5-family
+    # models, task-type wording for others), so they stay admin-editable.
+    query_prefix: Mapped[str] = mapped_column(Text, default="", server_default="", nullable=False)
+    document_prefix: Mapped[str] = mapped_column(Text, default="", server_default="", nullable=False)
     api_key_enc: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     updated_by: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
@@ -442,6 +449,19 @@ class CampusKnowledgeRecord(Base):
             name="ck_knowledge_records_type",
         ),
         Index("ix_knowledge_records_source_current", "source_id", "is_current"),
+        Index("ix_knowledge_records_source_revision", "source_revision_id"),
+        Index(
+            "ix_knowledge_records_url_current",
+            "url",
+            "source_id",
+            postgresql_where=text("is_current"),
+        ),
+        Index(
+            "ix_knowledge_records_embedding_model_current",
+            "embedding_model",
+            "source_id",
+            postgresql_where=text("is_current AND embedding IS NOT NULL"),
+        ),
         Index("ix_knowledge_records_type_dates", "record_type", "starts_at", "ends_at"),
         Index("ix_knowledge_records_audience", "campus", "department", "degree_level"),
         Index("ix_knowledge_records_published", "published_at", "id"),

@@ -119,6 +119,10 @@ class EmbeddingSettingsIn(BaseModel):
     base_url: str | None = Field(default=None, max_length=2000)
     dimensions: int = Field(default=1536, ge=1, le=1536)
     batch_size: int = Field(default=32, ge=1, le=128)
+    # Retrieval models expect a query and the passage answering it to be
+    # embedded with different instructions; the wording is provider-specific.
+    query_prefix: str = Field(default="", max_length=500)
+    document_prefix: str = Field(default="", max_length=500)
     api_key: str | None = Field(default=None, max_length=4000)
     clear_api_key: bool = False
 
@@ -602,6 +606,8 @@ async def _embedding_out(db: AsyncSession, organization_id: UUID) -> dict:
         "base_url": config.base_url,
         "dimensions": config.dimensions,
         "batch_size": config.batch_size,
+        "query_prefix": config.query_prefix,
+        "document_prefix": config.document_prefix,
         "has_api_key": bool(config.api_key),
         "has_database_override": config.database_override,
         "model_label": config.model_label if config.enabled else None,
@@ -664,6 +670,8 @@ async def update_embedding_settings(
     row.base_url = body.base_url.strip().rstrip("/") if body.base_url and body.provider != "disabled" else None
     row.dimensions = body.dimensions
     row.batch_size = body.batch_size
+    row.query_prefix = body.query_prefix
+    row.document_prefix = body.document_prefix
     row.updated_by = principal.user.id
     if supplied_key:
         row.api_key_enc = encrypt_secret(supplied_key)
@@ -682,6 +690,8 @@ async def update_embedding_settings(
             "base_url": row.base_url,
             "dimensions": row.dimensions,
             "batch_size": row.batch_size,
+            "query_prefix": row.query_prefix,
+            "document_prefix": row.document_prefix,
         },
     )
     return await _embedding_out(db, organization_id)

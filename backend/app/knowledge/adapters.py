@@ -22,6 +22,28 @@ def _clean(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()
 
 
+def _clean_content(value: Any) -> str:
+    lines = [_clean(line) for line in str(value or "").replace("\r", "\n").split("\n")]
+    return "\n".join(line for line in lines if line)
+
+
+def _html_content(root) -> str:
+    """Preserve semantic HTML boundaries for the downstream chunker."""
+    block_tags = {"h1", "h2", "h3", "h4", "h5", "h6", "p", "li", "pre", "blockquote", "tr"}
+    lines: list[str] = []
+    for node in root.select(", ".join(sorted(block_tags))):
+        if node.find_parent(block_tags):
+            continue
+        text = _clean(node.get_text(" "))
+        if not text:
+            continue
+        if node.name and node.name.startswith("h") and node.name[1:].isdigit():
+            text = f"{'#' * int(node.name[1:])} {text}"
+        if not lines or lines[-1] != text:
+            lines.append(text)
+    return "\n".join(lines) or _clean_content(root.get_text("\n"))
+
+
 def _date(value: Any) -> datetime | None:
     text = _clean(value)
     if not text:
@@ -65,7 +87,7 @@ def _record(raw: dict[str, Any], defaults: dict[str, Any], source_url: str | Non
     if record_type not in RECORD_TYPES:
         raise ValueError(f"Unsupported record_type: {record_type}")
     title = _clean(merged.get("title"))
-    content = _clean(merged.get("content") or merged.get("summary") or title)
+    content = _clean_content(merged.get("content") or merged.get("summary") or title)
     if not title or not content:
         raise ValueError("Every parsed record needs a title and content")
     url = _clean(merged.get("url")) or source_url
@@ -138,7 +160,7 @@ class HtmlPageAdapter(SourceAdapter):
             "title": _clean(
                 title_node.get_text(" ") if title_node else soup.title.string if soup.title else document.url
             ),
-            "content": _clean(root.get_text(" ")),
+            "content": _html_content(root),
             "url": document.url,
         }
         return [_record(raw, config.get("defaults", {}), document.url)]
@@ -168,7 +190,7 @@ class DrupalAdapter(SourceAdapter):
                     {
                         "external_id": node.get("data-history-node-id") or href,
                         "title": title,
-                        "content": _clean(node.get_text(" ")),
+                        "content": _html_content(node),
                         "url": href,
                         "published_at": (
                             time_node.get("datetime") if time_node and time_node.has_attr("datetime") else None
@@ -290,14 +312,35 @@ class PdfAdapter(SourceAdapter):
         if document is None:
             return []
         reader = PdfReader(io.BytesIO(document.body))
-        content = "\n".join(page.extract_text() or "" for page in reader.pages)
-        raw = {
-            "external_id": config.get("external_id") or document.url,
-            "title": config.get("title") or document.url.rsplit("/", 1)[-1],
-            "content": content,
-            "url": document.url,
-        }
-        return [_record(raw, config.get("defaults", {}), document.url)]
+        parent_id = config.get("external_id") or document.url
+        title = config.get("title") or document.url.rsplit("/", 1)[-1]
+        defaults = config.get("defaults", {})
+        records = []
+        page_count = len(reader.pages)
+        for page_number, page in enumerate(reader.pages, start=1):
+            content = _clean_content(page.extract_text() or "")
+            if not content:
+                continue
+            metadata = {
+                **(defaults.get("metadata") if isinstance(defaults.get("metadata"), dict) else {}),
+                "document_external_id": parent_id,
+                "page_number": page_number,
+                "page_count": page_count,
+            }
+            records.append(
+                _record(
+                    {
+                        "external_id": f"{parent_id}::page:{page_number:04d}",
+                        "title": title,
+                        "content": content,
+                        "url": document.url,
+                        "metadata": metadata,
+                    },
+                    defaults,
+                    document.url,
+                )
+            )
+        return records
 
 
 ADAPTERS: dict[str, SourceAdapter] = {

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -17,6 +18,10 @@ VECTOR_STORAGE_DIMENSIONS = 1536
 logger = get_logger(__name__)
 
 
+class EmbeddingResponseError(ValueError):
+    """The provider returned a response that cannot be paired to inputs safely."""
+
+
 @dataclass(frozen=True, slots=True)
 class EmbeddingConfig:
     provider: str
@@ -26,6 +31,8 @@ class EmbeddingConfig:
     batch_size: int
     api_key: str | None = None
     database_override: bool = False
+    query_prefix: str = ""
+    document_prefix: str = ""
 
     @property
     def enabled(self) -> bool:
@@ -33,7 +40,19 @@ class EmbeddingConfig:
 
     @property
     def model_label(self) -> str:
-        return f"{self.provider}:{self.model}:{self.dimensions}"
+        """Identify vectors by everything that changes their meaning.
+
+        A stored vector is only comparable to a query vector produced the same
+        way, so the document prefix belongs in the label: changing it retires
+        the old vectors instead of silently mixing two embedding spaces. The
+        label is left untouched when no prefix is configured, which keeps
+        already-indexed corpora valid.
+        """
+        label = f"{self.provider}:{self.model}:{self.dimensions}"
+        if not self.document_prefix:
+            return label
+        digest = hashlib.sha256(self.document_prefix.encode()).hexdigest()[:8]
+        return f"{label}:{digest}"
 
 
 async def get_embedding_config(db: AsyncSession, organization_id: UUID) -> EmbeddingConfig:
@@ -47,6 +66,8 @@ async def get_embedding_config(db: AsyncSession, organization_id: UUID) -> Embed
             batch_size=row.batch_size,
             api_key=decrypt_secret(row.api_key_enc) if row.api_key_enc else None,
             database_override=True,
+            query_prefix=row.query_prefix or "",
+            document_prefix=row.document_prefix or "",
         )
 
     settings = get_settings()
@@ -91,13 +112,13 @@ def _response_vectors(payload: Any, expected_count: int) -> list[list[float]]:
     """
     rows = payload.get("data") if isinstance(payload, dict) else None
     if not isinstance(rows, list) or len(rows) != expected_count:
-        raise ValueError("Embedding provider returned an incomplete batch")
+        raise EmbeddingResponseError("Embedding provider returned an incomplete batch")
     if not all(isinstance(item, dict) and isinstance(item.get("embedding"), list) for item in rows):
-        raise ValueError("Embedding provider returned a malformed batch")
+        raise EmbeddingResponseError("Embedding provider returned a malformed batch")
 
     indexed_rows = ["index" in item for item in rows]
     if any(indexed_rows) and not all(indexed_rows):
-        raise ValueError("Embedding provider returned inconsistent indexes")
+        raise EmbeddingResponseError("Embedding provider returned inconsistent indexes")
     if not any(indexed_rows):
         return [item["embedding"] for item in rows]
 
@@ -105,10 +126,10 @@ def _response_vectors(payload: Any, expected_count: int) -> list[list[float]]:
     for item in rows:
         index = item["index"]
         if not isinstance(index, int) or isinstance(index, bool) or index in indexed:
-            raise ValueError("Embedding provider returned invalid indexes")
+            raise EmbeddingResponseError("Embedding provider returned invalid indexes")
         indexed[index] = item["embedding"]
     if set(indexed) != set(range(expected_count)):
-        raise ValueError("Embedding provider returned incomplete indexes")
+        raise EmbeddingResponseError("Embedding provider returned incomplete indexes")
     return [indexed[index] for index in range(expected_count)]
 
 
@@ -128,23 +149,55 @@ async def embed_texts(
     texts: Sequence[str],
     *,
     config: EmbeddingConfig | None = None,
+    prefix: str | None = None,
 ) -> list[list[float] | None]:
-    """Embed only public canonical text using the organization's provider."""
+    """Embed only public canonical text using the organization's provider.
+
+    ``prefix`` defaults to the configured document instruction; callers
+    embedding a search query pass the query instruction instead.
+    """
     resolved = config or await get_embedding_config(db, organization_id)
     if not texts or not resolved.enabled:
         return [None for _ in texts]
     if resolved.provider == "remote" and not resolved.api_key:
         raise ValueError("Remote embedding API key is not configured")
-    vectors = await _request_embeddings(resolved, texts)
+    lead = resolved.document_prefix if prefix is None else prefix
+    texts = [f"{lead}{text}" for text in texts] if lead else list(texts)
+    try:
+        vectors = await _request_embeddings(resolved, texts)
+    except EmbeddingResponseError as exc:
+        if len(texts) == 1:
+            raise
+        # Some OpenAI-compatible endpoints return mixed or incomplete index
+        # metadata for batch requests. Retry each item independently instead
+        # of guessing the input/output pairing and corrupting the vector store.
+        logger.warning(
+            "knowledge_embedding_batch_fallback",
+            provider=resolved.provider,
+            batch_size=len(texts),
+            error=str(exc),
+        )
+        vectors = []
+        for text in texts:
+            vectors.extend(await _request_embeddings(resolved, [text]))
     return [_storage_vector(vector, resolved.dimensions) for vector in vectors]
 
 
-async def embed_query(db: AsyncSession, organization_id: UUID, text: str) -> list[float] | None:
-    config = await get_embedding_config(db, organization_id)
+async def embed_query(
+    db: AsyncSession,
+    organization_id: UUID,
+    text: str,
+    *,
+    config: EmbeddingConfig | None = None,
+) -> list[float] | None:
+    resolved = config or await get_embedding_config(db, organization_id)
     try:
-        return (await embed_texts(db, organization_id, [text], config=config))[0]
+        vectors = await embed_texts(
+            db, organization_id, [text], config=resolved, prefix=resolved.query_prefix
+        )
+        return vectors[0]
     except (httpx.HTTPError, ValueError) as exc:
         # Search remains available through full-text/keyword ranking when an
         # embedding endpoint is temporarily unavailable.
-        logger.warning("knowledge_query_embedding_failed", provider=config.provider, error=str(exc))
+        logger.warning("knowledge_query_embedding_failed", provider=resolved.provider, error=str(exc))
         return None

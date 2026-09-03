@@ -1,14 +1,40 @@
-import math
-import re
+"""Hybrid campus retrieval.
+
+Every ranking signal here is produced by an index inside PostgreSQL:
+
+* stemmed full-text matching over a language-aware ``tsvector`` (GIN),
+* trigram word-similarity for the agglutinative forms Snowball misses (GIN),
+* approximate nearest neighbours over pgvector embeddings (HNSW).
+
+The three ranked candidate lists are fused with Reciprocal Rank Fusion in the
+same statement, so the database returns an already-ordered result set and the
+application only picks one chunk per document.
+"""
+
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
-from sqlalchemy import and_, func, literal_column, or_, select
+from sqlalchemy import Float, case, func, literal, literal_column, or_, select, union_all
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import CampusKnowledgeRecord, CampusSource
-from app.knowledge.embeddings import embed_query
+from app.knowledge.embeddings import embed_query, get_embedding_config
+
+# Reciprocal Rank Fusion. The constant damps the influence of the very top of
+# each list so a single channel cannot dominate the fused ordering.
+RRF_K = 60
+LEXICAL_WEIGHT = 0.40
+TRIGRAM_WEIGHT = 0.20
+SEMANTIC_WEIGHT = 0.40
+
+# Snowball has no configuration for every language in the corpus, and a query
+# carries no language of its own, so both configurations are probed against the
+# one GIN index. Turkish is the majority language and is listed first.
+TEXT_SEARCH_CONFIGS = ("turkish", "english")
+
+# Recent records get a small tie-breaking nudge over equally-ranked older ones.
+FRESHNESS_WINDOW = timedelta(days=14)
 
 
 @dataclass(slots=True)
@@ -23,50 +49,44 @@ class SearchFilters:
     include_expired: bool = False
 
 
-def _tokens(text: str) -> set[str]:
-    return {token for token in re.findall(r"[\wçğıöşüÇĞİÖŞÜ-]+", text.lower()) if len(token) > 1}
+def _metadata(record: CampusKnowledgeRecord) -> dict:
+    return record.metadata_json if isinstance(record.metadata_json, dict) else {}
 
 
-def _cosine(left: list[float] | None, right: list[float] | None) -> float:
-    if not left or not right:
-        return 0.0
-    dot = sum(a * b for a, b in zip(left, right, strict=False))
-    left_norm = math.sqrt(sum(value * value for value in left))
-    right_norm = math.sqrt(sum(value * value for value in right))
-    return dot / (left_norm * right_norm) if left_norm and right_norm else 0.0
+def _document_id(record: CampusKnowledgeRecord) -> str:
+    metadata = _metadata(record)
+    return str(metadata.get("document_external_id") or metadata.get("parent_external_id") or record.external_id)
 
 
 def _serialize(record: CampusKnowledgeRecord, source: CampusSource, score: float) -> dict:
+    metadata = _metadata(record)
     return {
         "id": str(record.id),
+        "document_id": _document_id(record),
         "type": record.record_type,
         "title": record.title,
         "summary": record.summary,
         "content": record.content,
+        "section": metadata.get("section"),
+        "chunk_index": metadata.get("chunk_index", 0),
+        "chunk_count": metadata.get("chunk_count", 1),
+        "page_number": metadata.get("page_number"),
         "url": record.url,
         "language": record.language,
         "starts_at": record.starts_at.isoformat() if record.starts_at else None,
         "ends_at": record.ends_at.isoformat() if record.ends_at else None,
         "published_at": record.published_at.isoformat() if record.published_at else None,
-        "audience": record.audience,
+        "valid_until": record.valid_until.isoformat() if record.valid_until else None,
+        "authority": record.authority,
         "source": source.name,
         "source_id": str(source.id),
-        "retrieved_at": datetime.now(UTC).isoformat(),
+        "source_url": source.url,
         "source_last_success_at": source.last_success_at.isoformat() if source.last_success_at else None,
-        "score": round(score, 6),
+        "score": round(float(score), 6),
     }
 
 
-async def search_knowledge(
-    db: AsyncSession,
-    query: str,
-    filters: SearchFilters | None = None,
-    *,
-    organization_id: UUID,
-    limit: int = 10,
-) -> list[dict]:
-    filters = filters or SearchFilters()
-    now = datetime.now(UTC)
+def _conditions(filters: SearchFilters, organization_id: UUID, now: datetime) -> list:
     conditions = [
         CampusKnowledgeRecord.is_current.is_(True),
         CampusSource.organization_id == organization_id,
@@ -100,46 +120,158 @@ async def search_knowledge(
         )
     if not filters.include_expired:
         conditions.append(or_(CampusKnowledgeRecord.valid_until.is_(None), CampusKnowledgeRecord.valid_until >= now))
+    return conditions
 
-    query_embedding = await embed_query(db, organization_id, query) if query.strip() else None
+
+def _ranked_channel(conditions: list, signal, match, candidate_limit: int, *, descending: bool, name: str):
+    """Rank one retrieval channel in the database and number its results.
+
+    The inner statement is ordered and limited so the channel's index bounds the
+    work; the outer statement only assigns the rank RRF consumes.
+    """
+    order = signal.desc() if descending else signal.asc()
+    inner = (
+        select(CampusKnowledgeRecord.id.label("record_id"), signal.label("signal"))
+        .join(CampusSource, CampusSource.id == CampusKnowledgeRecord.source_id)
+        .where(*conditions, match)
+        .order_by(order)
+        .limit(candidate_limit)
+        .subquery()
+    )
+    inner_order = inner.c.signal.desc() if descending else inner.c.signal.asc()
+    return select(
+        inner.c.record_id,
+        func.row_number().over(order_by=inner_order).label("rank"),
+    ).cte(name)
+
+
+def _weighted(cte, weight: float):
+    return select(
+        cte.c.record_id,
+        (literal(weight) / (literal(RRF_K) + func.cast(cte.c.rank, Float))).label("contribution"),
+    )
+
+
+def _pick_per_document(
+    rows: list[tuple[CampusKnowledgeRecord, CampusSource, float]],
+    *,
+    limit: int,
+) -> list[dict]:
+    """Return the best-ranked chunk per document, preserving fused order."""
+    results: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for record, source, score in rows:
+        key = (str(source.id), _document_id(record))
+        if key in seen:
+            continue
+        seen.add(key)
+        results.append(_serialize(record, source, score))
+        if len(results) >= limit:
+            break
+    return results
+
+
+async def search_knowledge(
+    db: AsyncSession,
+    query: str,
+    filters: SearchFilters | None = None,
+    *,
+    organization_id: UUID,
+    limit: int = 10,
+) -> list[dict]:
+    filters = filters or SearchFilters()
+    now = datetime.now(UTC)
+    conditions = _conditions(filters, organization_id, now)
+    clean_query = query.strip()
+
     base = select(CampusKnowledgeRecord, CampusSource).join(
         CampusSource, CampusSource.id == CampusKnowledgeRecord.source_id
     )
-    postgres = db.get_bind().dialect.name == "postgresql"
-    if postgres and query.strip():
-        tsquery = func.websearch_to_tsquery("simple", query)
-        fts_rank = func.ts_rank_cd(literal_column("search_vector"), tsquery)
-        if query_embedding is not None:
-            semantic = 1 - CampusKnowledgeRecord.embedding.cosine_distance(query_embedding)
-            score = fts_rank * 0.55 + func.coalesce(semantic, 0) * 0.30 + CampusKnowledgeRecord.authority / 1000
-            match = or_(literal_column("search_vector").op("@@")(tsquery), CampusKnowledgeRecord.embedding.is_not(None))
-        else:
-            score = fts_rank * 0.85 + CampusKnowledgeRecord.authority / 1000
-            match = literal_column("search_vector").op("@@")(tsquery)
-        statement = base.add_columns(score.label("rank")).where(*conditions, match).order_by(score.desc()).limit(limit)
-        rows = (await db.execute(statement)).all()
-        return [_serialize(record, source, float(rank or 0)) for record, source, rank in rows]
+    if not clean_query:
+        rows = (
+            await db.execute(
+                base.where(*conditions)
+                .order_by(CampusKnowledgeRecord.published_at.desc().nullslast(), CampusKnowledgeRecord.authority.desc())
+                .limit(max(limit * 5, 50))
+            )
+        ).all()
+        return _pick_per_document([(record, source, 1.0) for record, source in rows], limit=limit)
 
-    candidate_statement = (
-        base.where(and_(*conditions)).order_by(CampusKnowledgeRecord.published_at.desc()).limit(250)
+    config = await get_embedding_config(db, organization_id)
+    query_embedding = await embed_query(db, organization_id, clean_query, config=config)
+    candidate_limit = min(500, max(limit * 8, 50))
+
+    search_vector = literal_column("campus_knowledge_records.search_vector")
+    search_text = literal_column("campus_knowledge_records.search_text")
+    tsqueries = [func.websearch_to_tsquery(name, clean_query) for name in TEXT_SEARCH_CONFIGS]
+
+    channels = [
+        (
+            _ranked_channel(
+                conditions,
+                func.greatest(*[func.ts_rank_cd(search_vector, tsquery) for tsquery in tsqueries]),
+                or_(*[search_vector.op("@@")(tsquery) for tsquery in tsqueries]),
+                candidate_limit,
+                descending=True,
+                name="lexical",
+            ),
+            LEXICAL_WEIGHT,
+        ),
+        (
+            _ranked_channel(
+                conditions,
+                func.word_similarity(clean_query, search_text),
+                search_text.op("%>")(clean_query),
+                candidate_limit,
+                descending=True,
+                name="trigram",
+            ),
+            TRIGRAM_WEIGHT,
+        ),
+    ]
+    if query_embedding is not None:
+        channels.append(
+            (
+                _ranked_channel(
+                    conditions,
+                    CampusKnowledgeRecord.embedding.cosine_distance(query_embedding),
+                    CampusKnowledgeRecord.embedding_model == config.model_label,
+                    candidate_limit,
+                    descending=False,
+                    name="semantic",
+                ),
+                SEMANTIC_WEIGHT,
+            )
+        )
+
+    contributions = union_all(*[_weighted(cte, weight) for cte, weight in channels]).subquery()
+    fused = (
+        select(
+            contributions.c.record_id,
+            func.sum(contributions.c.contribution).label("score"),
+        )
+        .group_by(contributions.c.record_id)
+        .cte("fused")
     )
-    candidates = (await db.execute(candidate_statement)).all()
-    query_tokens = _tokens(query)
-    ranked: list[tuple[float, CampusKnowledgeRecord, CampusSource]] = []
-    for record, source in candidates:
-        haystack = _tokens(f"{record.title} {record.summary or ''} {record.content}")
-        keyword = len(query_tokens & haystack) / max(len(query_tokens), 1) if query_tokens else 0.5
-        semantic = _cosine(query_embedding, record.embedding) if query_embedding is not None else 0
-        freshness = 0.05 if record.published_at and (now - record.published_at).days <= 14 else 0
-        score = keyword * 0.55 + semantic * 0.30 + record.authority / 1000 + freshness
-        if not query_tokens or keyword or semantic > 0.25:
-            ranked.append((score, record, source))
-    ranked.sort(key=lambda item: item[0], reverse=True)
-    return [_serialize(record, source, score) for score, record, source in ranked[:limit]]
+
+    # Authority and freshness are deliberately small: they break ties between
+    # comparable matches rather than promoting a weak match from a loud source.
+    freshness = case((CampusKnowledgeRecord.published_at >= now - FRESHNESS_WINDOW, 0.001), else_=0.0)
+    quality = (func.cast(CampusKnowledgeRecord.authority, Float) / 100) * 0.002 + freshness
+
+    statement = (
+        base.add_columns(((fused.c.score + quality) * 100).label("final_score"))
+        .join(fused, fused.c.record_id == CampusKnowledgeRecord.id)
+        .order_by(literal_column("final_score").desc())
+        .limit(max(limit * 5, 50))
+    )
+    rows = (await db.execute(statement)).all()
+    return _pick_per_document([(record, source, score) for record, source, score in rows], limit=limit)
 
 
 async def read_campus_page(db: AsyncSession, url: str, *, organization_id: UUID) -> dict | None:
-    row = (
+    """Reconstruct a full indexed document from its stored chunks."""
+    lead_row = (
         await db.execute(
             select(CampusKnowledgeRecord, CampusSource)
             .join(CampusSource, CampusSource.id == CampusKnowledgeRecord.source_id)
@@ -154,4 +286,50 @@ async def read_campus_page(db: AsyncSession, url: str, *, organization_id: UUID)
             .limit(1)
         )
     ).one_or_none()
-    return _serialize(row[0], row[1], 1.0) if row else None
+    if lead_row is None:
+        return None
+    lead, source = lead_row
+    document_id = _document_id(lead)
+
+    # Chunk ids are derived from the document id, so the siblings are selected
+    # by that key in the database rather than by scanning and filtering here.
+    siblings = (
+        (
+            await db.execute(
+                select(CampusKnowledgeRecord)
+                .where(
+                    CampusKnowledgeRecord.source_id == source.id,
+                    CampusKnowledgeRecord.is_current.is_(True),
+                    or_(
+                        CampusKnowledgeRecord.external_id == document_id,
+                        CampusKnowledgeRecord.external_id.startswith(f"{document_id}::"),
+                    ),
+                )
+                .order_by(
+                    CampusKnowledgeRecord.metadata_json["page_number"].as_integer().nullsfirst(),
+                    CampusKnowledgeRecord.metadata_json["chunk_index"].as_integer().nullsfirst(),
+                    CampusKnowledgeRecord.external_id,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not siblings:
+        siblings = [lead]
+
+    result = _serialize(siblings[0], source, 1.0)
+    reconstructed: list[str] = []
+    previous_section: str | None = None
+    for record in siblings:
+        section = _metadata(record).get("section")
+        if section and section != previous_section:
+            reconstructed.append(str(section))
+        reconstructed.append(record.content)
+        previous_section = str(section) if section else None
+    result["content"] = "\n\n".join(reconstructed)
+    result["summary"] = next((record.summary for record in siblings if record.summary), None)
+    result["section"] = None
+    result["chunk_index"] = 0
+    result["chunk_count"] = len(siblings)
+    return result

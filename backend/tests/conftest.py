@@ -1,4 +1,8 @@
+import asyncio
+import atexit
 import os
+import subprocess
+import sys
 import tempfile
 import time
 import uuid
@@ -15,7 +19,54 @@ os.environ.setdefault("AGENT_IDLE_TIMEOUT_SECONDS", "3600")
 
 _tmp_root = Path(tempfile.gettempdir()) / f"devrimo-test-{uuid.uuid4().hex}"
 _tmp_root.mkdir(parents=True, exist_ok=True)
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_tmp_root / 'devrimo.db'}"
+
+# Retrieval is implemented in PostgreSQL — stemmed full-text search, trigram
+# similarity and pgvector ANN — so the suite runs against a real server rather
+# than a substitute engine that cannot express any of it. TEST_DATABASE_URL
+# points at the maintenance database; each run gets its own throwaway database.
+_ADMIN_URL = os.environ.get("TEST_DATABASE_URL", "postgresql://devrimo:devrimo@localhost:5432/postgres")
+_TEST_DB = f"devrimo_test_{uuid.uuid4().hex[:12]}"
+
+
+def _admin_connection():
+    import psycopg
+
+    return psycopg.connect(_ADMIN_URL, autocommit=True)
+
+
+with _admin_connection() as _conn:
+    _conn.execute(f'DROP DATABASE IF EXISTS "{_TEST_DB}"')
+    _conn.execute(f'CREATE DATABASE "{_TEST_DB}"')
+
+_base, _, _ = _ADMIN_URL.rpartition("/")
+os.environ["DATABASE_URL"] = f"{_base}/{_TEST_DB}".replace("postgresql://", "postgresql+asyncpg://", 1)
+
+# The schema comes from the migrations, not from ``create_all``: the search
+# columns are Postgres generated columns and the indexes are GIN/HNSW, none of
+# which the model metadata carries. Running them here also means every test
+# exercises the exact DDL production receives.
+subprocess.run(
+    [sys.executable, "-m", "alembic", "upgrade", "head"],
+    cwd=Path(__file__).resolve().parent.parent,
+    env={**os.environ},
+    check=True,
+    capture_output=True,
+)
+
+
+def _drop_test_database() -> None:
+    from app.db.session import engine as _engine
+
+    asyncio.run(_engine.dispose())
+    with _admin_connection() as conn:
+        conn.execute(
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = %s",
+            (_TEST_DB,),
+        )
+        conn.execute(f'DROP DATABASE IF EXISTS "{_TEST_DB}"')
+
+
+atexit.register(_drop_test_database)
 # Campus servers are never actually launched under AGENT_RUNTIME=fake, but the
 # spec renderer still builds paths from these and the toolset builder still
 # creates working directories — both of which must stay inside the sandbox.
@@ -42,17 +93,28 @@ async def _drop_agno_tables(conn) -> None:
 
     Without this they outlive the fixture and a session id reused by a later
     test resolves to the previous test's user — which looks exactly like a
-    cross-user history leak, and would mask a real one.
+    cross-user history leak, and would mask a real one. On Postgres they live in
+    Agno's own ``ai`` schema rather than beside the application's tables.
     """
-    result = await conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'agno_%'"))
-    for (table,) in result.fetchall():
-        await conn.execute(text(f'DROP TABLE IF EXISTS "{table}"'))
+    result = await conn.execute(
+        text(
+            "SELECT schemaname, tablename FROM pg_tables "
+            "WHERE tablename LIKE 'agno_%' AND schemaname NOT IN ('pg_catalog', 'information_schema')"
+        )
+    )
+    for schema, table in result.fetchall():
+        await conn.execute(text(f'DROP TABLE IF EXISTS "{schema}"."{table}" CASCADE'))
 
 
 @pytest.fixture(autouse=True)
 async def _fresh_schema():
+    # The migrations built the schema once for the whole session, so each test
+    # only needs the rows cleared. Truncating keeps the generated search columns
+    # and their GIN/HNSW indexes in place, which a drop/create cycle would lose.
+    tables = ", ".join(f'"{table.name}"' for table in Base.metadata.sorted_tables)
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.execute(text(f"TRUNCATE {tables} RESTART IDENTITY CASCADE"))
+        await _drop_agno_tables(conn)
     await reset_pool()
     # The Agno db caches which of its tables it has already created, so it must
     # be rebuilt alongside the schema or it will write to tables the previous
@@ -62,9 +124,10 @@ async def _fresh_schema():
     # Resident agents hold MCP subprocesses; a test that leaves one behind
     # leaks it into the next test's pool.
     await reset_pool()
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
-        await _drop_agno_tables(conn)
+    # Each test runs in its own event loop, and asyncpg connections are bound to
+    # the loop that opened them. Returning one to the pool would hand the next
+    # test a connection whose futures belong to a closed loop.
+    await engine.dispose()
 
 
 @pytest.fixture
