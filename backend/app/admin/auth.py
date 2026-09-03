@@ -29,6 +29,10 @@ class AdminPermission(StrEnum):
     runtime_read = "runtime:read"
     runtime_write = "runtime:write"
     system_read = "system:read"
+    knowledge_read = "knowledge:read"
+    knowledge_write = "knowledge:write"
+    planning_write = "planning:write"
+    groups_write = "groups:write"
 
 
 ROLE_PERMISSIONS = {
@@ -46,6 +50,7 @@ ROLE_PERMISSIONS = {
         AdminPermission.audit_export,
         AdminPermission.runtime_read,
         AdminPermission.system_read,
+        AdminPermission.knowledge_read,
     },
     AdminRole.campus_admin: {
         AdminPermission.overview_read,
@@ -55,6 +60,10 @@ ROLE_PERMISSIONS = {
         AdminPermission.integrations_read,
         AdminPermission.runtime_read,
         AdminPermission.system_read,
+        AdminPermission.knowledge_read,
+        AdminPermission.knowledge_write,
+        AdminPermission.planning_write,
+        AdminPermission.groups_write,
     },
 }
 

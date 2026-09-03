@@ -101,6 +101,7 @@ export type Profile = {
   display_name?: string | null;
   department?: string | null;
   locale: "tr" | "en";
+  mail_facts_enabled: boolean;
   onboarding_step?: string | null;
   onboarding_completed: boolean;
   onboarding_completed_at?: string | null;
@@ -110,6 +111,30 @@ export type ProfileInput = {
   display_name?: string | null;
   department?: string | null;
   locale?: "tr" | "en";
+  mail_facts_enabled?: boolean;
   onboarding_step?: string | null;
   onboarding_completed?: boolean;
+};
+
+export type CampusUpdate = {
+  id: string;
+  type: string;
+  title: string;
+  summary?: string | null;
+  content: string;
+  url?: string | null;
+  starts_at?: string | null;
+  ends_at?: string | null;
+  published_at?: string | null;
+  source: string;
+  retrieved_at: string;
+  origin: "campus" | "mail_fact";
+  read: boolean;
+};
+
+export type CampusUpdates = {
+  mode: "digest" | "feed";
+  items: CampusUpdate[];
+  personalized_by: { department?: string | null; degree_level?: string | null; campus?: string | null; interests: string[] };
+  generated_at: string;
 };

@@ -1,9 +1,12 @@
 """Construct the production Scholar profile."""
 
+from uuid import UUID
+
 from agno.agent import Agent
 from agno.tools.mcp import MCPTools
 
 from app.agents.models import build_model
+from app.agents.platform_tools import build_platform_tools
 from app.agents.runtime import AgentRuntimeConfig, default_runtime_config
 from app.agents.scholar.hooks import production_tool_hook
 from app.agents.scholar.learning import build_compression, build_learning
@@ -13,7 +16,9 @@ from app.config import get_settings
 from app.observability.flags import FLAG_HISTORY_RUNS, FLAG_TOOL_CALL_LIMIT, int_payload
 
 
-def build_scholar_agent(connected: list[MCPTools], runtime: AgentRuntimeConfig | None = None) -> Agent:
+def build_scholar_agent(
+    connected: list[MCPTools], runtime: AgentRuntimeConfig | None = None, *, user_id: UUID | None = None
+) -> Agent:
     settings = get_settings()
     runtime = runtime or default_runtime_config()
     model = build_model(runtime)
@@ -24,7 +29,7 @@ def build_scholar_agent(connected: list[MCPTools], runtime: AgentRuntimeConfig |
         description="A grounded, privacy-conscious ODTÜ student assistant.",
         model=model,
         db=get_agno_db(),
-        tools=list(connected),
+        tools=[*connected, *(build_platform_tools(user_id, connected) if user_id else [])],
         tool_hooks=[production_tool_hook],
         # Tunable without a deploy: a model looping through tool calls is a
         # live incident, and this is the dial that stops it.

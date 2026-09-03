@@ -24,5 +24,5 @@ def build_agent(user_id: UUID, connected: list[MCPTools], runtime: AgentRuntimeC
     if profile == "scholar":
         from app.agents.scholar.build import build_scholar_agent
 
-        return build_scholar_agent(connected, runtime)
+        return build_scholar_agent(connected, runtime, user_id=user_id)
     raise ValueError(f"Unknown AGENT_PROFILE: {profile!r}")

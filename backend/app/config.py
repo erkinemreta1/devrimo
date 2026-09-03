@@ -79,6 +79,23 @@ class Settings(BaseSettings):
     # their CWD (odtuclass) get a private directory beneath this.
     campus_state_root: str = "/var/lib/devrimo/campus"
     campus_mcp_timeout_seconds: int = 30
+    # Read the student's academic context from SAIS as part of saving a verified
+    # campus connection, so their profile is populated before their first turn.
+    # Costs one campus server spawn inside that request; turn it off to keep the
+    # save fast and leave the context to the planner's in-turn refresh.
+    campus_context_sync_on_connect: bool = True
+
+    # --- Shared campus knowledge ------------------------------------------
+    knowledge_worker_poll_seconds: int = 15
+    knowledge_worker_lease_seconds: int = 120
+    knowledge_fetch_timeout_seconds: int = 20
+    knowledge_fetch_max_bytes: int = 5_000_000
+    knowledge_fetch_user_agent: str = "DevrimoCampusIndexer/1.0 (+https://devrimo.app)"
+    knowledge_embedding_enabled: bool = False
+    knowledge_embedding_model: str = "text-embedding-3-small"
+    knowledge_embedding_dimensions: int = 1536
+    knowledge_embedding_base_url: str = "https://api.openai.com/v1"
+    knowledge_embedding_api_key: str = ""
 
     secret_encryption_key: str = "change-me-to-a-real-generated-secret"
 
@@ -105,7 +122,7 @@ class Settings(BaseSettings):
 
     @property
     def posthog_configured(self) -> bool:
-        return bool(self.posthog_enabled and self.posthog_api_key)
+        return bool(self.posthog_enabled and self.posthog_api_key.strip())
 
     @property
     def agentos_cors_origin_list(self) -> list[str]:

@@ -32,6 +32,9 @@ app/
     credentials.py        The only module that decrypts a METU password
     verify.py             One SSO sign-in, to check credentials before storing
     service.py            Profile + credential persistence
+  knowledge/              Versioned sources, adapters, ingestion, hybrid retrieval
+  planning/               Deterministic eligibility and maximum-GPA planning
+  student/                Verified context, preferences, updates, mail facts
   agentos/                JWT-protected operations/measurement service
   api/v1/                 Routes: agents, campus, chat, memories, profile, sessions
   schemas.py              Response shapes, kept in lockstep with the frontend
@@ -39,6 +42,12 @@ alembic/                  Schema migrations
 tests/                    Full API test suite against the echo model
 evals/                    Synthetic routing, grounding, bilingual, and safety evals
 ```
+
+The campus knowledge layer has a separate worker, an administrator-controlled
+source registry, reviewed publication, PostgreSQL full-text plus optional
+pgvector retrieval, deterministic academic planning, and protected course-group
+links. Its operating and extension guide is in
+[`docs/campus-intelligence.md`](../docs/campus-intelligence.md).
 
 ## Architecture
 
@@ -142,9 +151,14 @@ HTTP proxy cannot filter this traffic:
 Filtering this mix means L4, and the broker cannot do it to itself: `nftables`
 needs `NET_ADMIN`, which hands back the privilege that dropping the Docker
 socket removed. It belongs on the host — an nftables rule on the FORWARD chain
-for the `devrimo-internal` bridge, allowing METU hosts and the model endpoint.
-Worth doing as defence in depth; deployment configuration, not something this
-repo can ship.
+for the internal bridge, allowing METU hosts and the model endpoint. Worth doing
+as defence in depth; deployment configuration, not something this repo can ship.
+
+That bridge is named per Compose project by default (`devrimo-<project>-internal`),
+so that several stacks on one host — one per git worktree, say — cannot both
+claim the `postgres` service alias and leave the name resolving to two
+databases. A rule that has to reference a fixed name should pin it with
+`DEVRIMO_NETWORK_NAME`, and only on a host where a single stack runs.
 
 Be clear about what it would buy, though. The worst exfiltration path is *inside*
 any such allowlist: webmail can send mail as the student, to anywhere, and mail

@@ -113,3 +113,105 @@ export type RuntimeSettings = {
   updated_at: string | null;
   editable: boolean;
 };
+
+export type KnowledgeSource = {
+  id: string;
+  name: string;
+  kind: string;
+  url: string | null;
+  language: string;
+  authority: number;
+  audience: Record<string, unknown>;
+  schedule_seconds: number;
+  enabled: boolean;
+  status: string;
+  active_revision_id: string | null;
+  last_fetched_at: string | null;
+  last_success_at: string | null;
+  last_error: string | null;
+  revisions: number | null;
+  records: number | null;
+};
+
+export type SourceRevision = {
+  id: string;
+  revision: number;
+  status: string;
+  config: Record<string, unknown>;
+  validation: { ok: boolean; errors: string[]; warnings: string[] };
+  created_at: string;
+  published_at: string | null;
+};
+
+export type KnowledgeSourceDetail = KnowledgeSource & { revision_history: SourceRevision[] };
+
+export type EmbeddingSettings = {
+  provider: "disabled" | "local" | "remote";
+  model: string;
+  base_url: string | null;
+  dimensions: number;
+  batch_size: number;
+  has_api_key: boolean;
+  has_database_override: boolean;
+  model_label: string | null;
+  total_records: number;
+  embedded_records: number;
+  current_model_records: number;
+  active_jobs: number;
+};
+
+export type IngestionJob = {
+  id: string;
+  source_id: string;
+  source_name: string;
+  kind: "ingest" | "reembed";
+  status: string;
+  phase: string;
+  attempt: number;
+  total_records: number;
+  processed_records: number;
+  embedded_records: number;
+  embedding_provider: string | null;
+  embedding_model: string | null;
+  error_code: string | null;
+  error_detail: string | null;
+  created_at: string;
+  completed_at: string | null;
+  progress_updated_at: string;
+};
+
+export type KnowledgeSearchResult = {
+  id: string;
+  type: string;
+  title: string;
+  summary: string | null;
+  content: string;
+  url: string | null;
+  language: string | null;
+  starts_at: string | null;
+  ends_at: string | null;
+  published_at: string | null;
+  audience: Record<string, unknown>;
+  source: string;
+  source_id: string;
+  retrieved_at: string;
+  source_last_success_at: string | null;
+  score: number;
+};
+
+export type KnowledgeSearchResponse = {
+  query: string;
+  count: number;
+  embedding_model: string | null;
+  items: KnowledgeSearchResult[];
+};
+
+export type CourseGroup = {
+  id: string;
+  course_code: string;
+  section: string | null;
+  eligibility: Record<string, unknown>;
+  active: boolean;
+  valid_until: string | null;
+  has_invite_url: boolean;
+};

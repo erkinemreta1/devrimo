@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:0.8.1-pg16
     restart: unless-stopped
     environment:
       POSTGRES_USER: devrimo
@@ -41,6 +41,18 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
     networks:
       - devrimo-internal
     volumes:
@@ -61,6 +73,25 @@ services:
     # the host-root-equivalent mount this file used to carry — and lets the
     # image drop to an unprivileged user (see Dockerfile).
 
+  knowledge-worker:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    command: ["python", "-m", "app.knowledge.worker"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://devrimo:devrimo@postgres:5432/devrimo
+      AGNO_TELEMETRY: "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      broker:
+        condition: service_healthy
+    networks:
+      - devrimo-internal
+    security_opt:
+      - no-new-privileges
+
   agentos:
     build: .
     restart: unless-stopped
@@ -78,6 +109,8 @@ services:
       - "127.0.0.1:7777:7777"
     depends_on:
       postgres:
+        condition: service_healthy
+      broker:
         condition: service_healthy
     networks:
       - devrimo-internal
@@ -106,7 +139,19 @@ networks:
     # FORWARD chain for this bridge. That is deployment configuration, not a
     # promise this file can keep — see "Egress" in README.md for what it is
     # worth and what it does not cover.
-    name: devrimo-internal
+    #
+    # The name is scoped to the Compose project by default, because a fixed
+    # name is actively unsafe with more than one stack on a host. Two stacks
+    # sharing a bridge both register the `postgres` alias, so the name resolves
+    # to two addresses and each new connection lands on whichever database DNS
+    # returns — the pool ends up holding connections to both at once. That
+    # reads and writes a student's rows across two databases and surfaces as
+    # intermittent 500s rather than as a connection error.
+    #
+    # Set DEVRIMO_NETWORK_NAME to pin a stable bridge name where a host
+    # firewall rule has to reference it, which is the one case that wants a
+    # fixed name. Only pin it where a single stack owns the host.
+    name: ${DEVRIMO_NETWORK_NAME:-devrimo-${COMPOSE_PROJECT_NAME}-internal}
     driver: bridge
 
 volumes:

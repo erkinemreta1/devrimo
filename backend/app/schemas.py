@@ -218,6 +218,7 @@ class ProfileOut(BaseModel):
     display_name: str | None = None
     department: str | None = None
     locale: str = "tr"
+    mail_facts_enabled: bool = False
     onboarding_step: str | None = None
     onboarding_completed: bool = False
     onboarding_completed_at: datetime | None = None
@@ -229,6 +230,7 @@ class ProfileOut(BaseModel):
             display_name=profile.display_name,
             department=profile.department,
             locale=profile.locale,
+            mail_facts_enabled=profile.mail_facts_enabled,
             onboarding_step=profile.onboarding_step,
             onboarding_completed=profile.onboarding_completed,
             onboarding_completed_at=profile.onboarding_completed_at,
@@ -241,6 +243,7 @@ class ProfileIn(BaseModel):
     display_name: str | None = Field(default=None, max_length=255)
     department: str | None = Field(default=None, max_length=255)
     locale: str | None = None
+    mail_facts_enabled: bool | None = None
     onboarding_step: str | None = Field(default=None, max_length=64)
     onboarding_completed: bool | None = None
 

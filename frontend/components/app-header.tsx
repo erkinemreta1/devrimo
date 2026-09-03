@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { HomeIcon, MenuIcon, SettingsIcon, UserRoundIcon } from "lucide-react";
+import { BellRingIcon, HomeIcon, MenuIcon, SettingsIcon, UserRoundIcon } from "lucide-react";
 import { BrandMark } from "@/components/brand-mark";
 import { SignOutButton } from "@/components/auth/sign-out-button";
 import { LocaleSwitcher } from "@/components/locale-switcher";
@@ -32,6 +32,7 @@ export function AppHeader({ email }: { email?: string | null }) {
         <LocaleSwitcher />
         {email ? <span className="max-w-52 truncate px-1 text-sm text-muted-foreground">{email}</span> : null}
         <Link href="/" className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}><HomeIcon />{pick({ tr: "Ana sayfa", en: "Home" })}</Link>
+        <Link href="/updates" className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}><BellRingIcon />{pick({ tr: "Güncellemeler", en: "Updates" })}</Link>
         <Link href="/settings" className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}><SettingsIcon />{pick({ tr: "Ayarlar", en: "Settings" })}</Link>
         <SignOutButton />
       </div>
@@ -46,6 +47,7 @@ export function AppHeader({ email }: { email?: string | null }) {
             {email ? <DropdownMenuLabel className="flex items-center gap-2 px-2 py-2"><UserRoundIcon className="size-4" /><span className="min-w-0 truncate">{email}</span></DropdownMenuLabel> : null}
             <DropdownMenuSeparator />
             <DropdownMenuItem render={<Link href="/" />} className="min-h-10 px-2"><HomeIcon />{pick({ tr: "Ana sayfa", en: "Home" })}</DropdownMenuItem>
+            <DropdownMenuItem render={<Link href="/updates" />} className="min-h-10 px-2"><BellRingIcon />{pick({ tr: "Güncellemeler", en: "Updates" })}</DropdownMenuItem>
             <DropdownMenuItem render={<Link href="/settings" />} className="min-h-10 px-2"><SettingsIcon />{pick({ tr: "Ayarlar", en: "Settings" })}</DropdownMenuItem>
             <DropdownMenuSeparator />
             <div className="space-y-2 p-2">
