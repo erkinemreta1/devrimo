@@ -83,6 +83,8 @@ export function KnowledgePanel({ principal, title, description }: { principal: A
   });
   const allSourceIds = sources.data?.items.map((source) => source.id) ?? [];
   const allSelected = allSourceIds.length > 0 && allSourceIds.every((id) => selectedIds.has(id));
+  const draftSources = sources.data?.items.filter((s) => s.status !== "published") ?? [];
+  const draftCount = draftSources.length;
 
   function toggleSource(id: string) {
     setSelectedIds((current) => {
@@ -109,9 +111,26 @@ export function KnowledgePanel({ principal, title, description }: { principal: A
       <KnowledgeSearchLab />
 
       <section>
-        <div className="mb-3 flex items-end justify-between gap-3">
-          <div><h2 className="text-lg font-semibold">{pick({ tr: "Kampüs kaynakları", en: "Campus sources" })}</h2><p className="text-sm text-muted-foreground">{pick({ tr: "Birden fazla kaynağı seçerek ortak çalışma ayarlarını topluca değiştir.", en: "Select multiple sources to change shared operating settings in one action." })}</p></div>
-          {selectedIds.size ? <Badge variant="secondary">{selectedIds.size} {pick({ tr: "seçili", en: "selected" })}</Badge> : null}
+        <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
+          <div><h2 className="text-lg font-semibold">{pick({ tr: "Kampüs kaynakları", en: "Campus sources" })}</h2><p className="text-sm text-muted-foreground">{pick({ tr: "Birden fazla kaynağı seçerek yayınla veya çalışma ayarlarını topluca değiştir.", en: "Select multiple sources to publish or change shared operating settings in one action." })}</p></div>
+          <div className="flex items-center gap-2">
+            {canWrite && draftCount > 0 ? (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setSelectedIds(new Set(draftSources.map((s) => s.id)));
+                }}
+              >
+                <ListChecksIcon className="size-4" />
+                {pick({
+                  tr: `${draftCount} taslağı seç`,
+                  en: `Select ${draftCount} drafts`,
+                })}
+              </Button>
+            ) : null}
+            {selectedIds.size ? <Badge variant="secondary">{selectedIds.size} {pick({ tr: "seçili", en: "selected" })}</Badge> : null}
+          </div>
         </div>
         {canWrite && selectedIds.size ? <BulkSourceEditor ids={[...selectedIds]} onClear={() => setSelectedIds(new Set())} onDone={() => { setSelectedIds(new Set()); refresh(); }} /> : null}
         {sources.isLoading ? <Skeleton className="h-72 rounded-xl" /> : sources.error ? <ErrorState error={sources.error} retry={() => void sources.refetch()} /> : <Card className="surface-raised border-0 py-0 ring-1 ring-foreground/8"><CardContent className="px-0">{sources.data?.items.length ? <Table><TableHeader className="bg-muted/45"><TableRow>
@@ -268,18 +287,108 @@ function BulkSourceEditor({ ids, onClear, onDone }: { ids: string[]; onClear: ()
     ...(authority !== "" ? { authority: Number(authority) } : {}),
     ...(scheduleMinutes !== "" ? { schedule_seconds: Number(scheduleMinutes) * 60 } : {}),
   }), [authority, enabled, language, scheduleMinutes]);
-  const mutation = useMutation({
+  const updateMutation = useMutation({
     mutationFn: () => adminMutate<{ updated: number }>("sources/bulk", "PUT", { source_ids: ids, changes }),
     onSuccess: (data) => { toast.success(`${data.updated} ${pick({ tr: "kaynak güncellendi", en: "sources updated" })}`); onDone(); },
     onError: (error) => toast.error(error.message),
   });
-  return <Card className="mb-3 border-primary/20 bg-primary/[0.035]"><CardContent><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-[1fr_1fr_8rem_10rem_auto]">
-    <div className="space-y-2"><Label>{pick({ tr: "Çalışma durumu", en: "Operating state" })}</Label><Select value={enabled} onValueChange={(value) => setEnabled(value ?? "unchanged")}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="unchanged">{pick({ tr: "Değiştirme", en: "No change" })}</SelectItem><SelectItem value="enabled">{pick({ tr: "Etkinleştir", en: "Enable" })}</SelectItem><SelectItem value="disabled">{pick({ tr: "Devre dışı bırak", en: "Disable" })}</SelectItem></SelectContent></Select></div>
-    <div className="space-y-2"><Label>{pick({ tr: "Dil", en: "Language" })}</Label><Select value={language} onValueChange={(value) => setLanguage(value ?? "unchanged")}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="unchanged">{pick({ tr: "Değiştirme", en: "No change" })}</SelectItem><SelectItem value="tr">Türkçe</SelectItem><SelectItem value="en">English</SelectItem></SelectContent></Select></div>
-    <div className="space-y-2"><Label>{pick({ tr: "Yetki", en: "Authority" })}</Label><Input type="number" min={0} max={100} value={authority} onChange={(event) => setAuthority(event.target.value)} placeholder="—" /></div>
-    <div className="space-y-2"><Label>{pick({ tr: "Yenileme (dk)", en: "Refresh (min)" })}</Label><Input type="number" min={5} value={scheduleMinutes} onChange={(event) => setScheduleMinutes(event.target.value)} placeholder="—" /></div>
-    <div className="flex items-end gap-2"><Button disabled={!Object.keys(changes).length || mutation.isPending} onClick={() => mutation.mutate()}><SaveIcon />{pick({ tr: "Uygula", en: "Apply" })}</Button><Button variant="ghost" size="icon" onClick={onClear} aria-label={pick({ tr: "Seçimi temizle", en: "Clear selection" })}><XIcon /></Button></div>
-  </div></CardContent></Card>;
+  const publishMutation = useMutation({
+    mutationFn: () => adminMutate<{ count: number; published: unknown[]; failed: { reason: string }[] }>("sources/batch/publish", "POST", { source_ids: ids }),
+    onSuccess: (data) => {
+      if (data.count > 0) {
+        toast.success(`${data.count} ${pick({ tr: "kaynak yayınlandı ve içe aktarma sıraya alındı", en: "sources published and ingestion queued" })}`);
+      }
+      if (data.failed && data.failed.length > 0) {
+        toast.error(`${data.failed.length} ${pick({ tr: "kaynak yayınlanamadı", en: "sources failed to publish" })}: ${data.failed[0].reason}`);
+      }
+      onDone();
+    },
+    onError: (error) => toast.error(error.message),
+  });
+  return (
+    <Card className="mb-3 border-primary/20 bg-primary/[0.035]">
+      <CardContent className="space-y-3 pt-4">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-primary/10 pb-3">
+          <div className="flex items-center gap-2">
+            <Badge variant="outline" className="font-semibold">
+              {ids.length} {pick({ tr: "kaynak seçildi", en: "sources selected" })}
+            </Badge>
+            <span className="text-xs text-muted-foreground">
+              {pick({
+                tr: "Toplu yayınlama geçerli taslakları yayına alır ve hemen veri çekme işlemini sıraya koyar.",
+                en: "Batch publishing publishes valid drafts and immediately queues ingestion.",
+              })}
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="default"
+              size="sm"
+              disabled={publishMutation.isPending}
+              onClick={() => publishMutation.mutate()}
+            >
+              <RocketIcon className="size-4" />
+              {pick({
+                tr: `Seçilenleri Yayınla (${ids.length})`,
+                en: `Publish Selected (${ids.length})`,
+              })}
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={onClear}
+              aria-label={pick({ tr: "Seçimi temizle", en: "Clear selection" })}
+            >
+              <XIcon />
+            </Button>
+          </div>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-[1fr_1fr_8rem_10rem_auto]">
+          <div className="space-y-2">
+            <Label>{pick({ tr: "Çalışma durumu", en: "Operating state" })}</Label>
+            <Select value={enabled} onValueChange={(value) => setEnabled(value ?? "unchanged")}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="unchanged">{pick({ tr: "Değiştirme", en: "No change" })}</SelectItem>
+                <SelectItem value="enabled">{pick({ tr: "Etkinleştir", en: "Enable" })}</SelectItem>
+                <SelectItem value="disabled">{pick({ tr: "Devre dışı bırak", en: "Disable" })}</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-2">
+            <Label>{pick({ tr: "Dil", en: "Language" })}</Label>
+            <Select value={language} onValueChange={(value) => setLanguage(value ?? "unchanged")}
+            ><SelectTrigger><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="unchanged">{pick({ tr: "Değiştirme", en: "No change" })}</SelectItem>
+              <SelectItem value="tr">Türkçe</SelectItem>
+              <SelectItem value="en">English</SelectItem>
+            </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-2">
+            <Label>{pick({ tr: "Yetki", en: "Authority" })}</Label>
+            <Input type="number" min={0} max={100} value={authority} onChange={(event) => setAuthority(event.target.value)} placeholder="—" />
+          </div>
+          <div className="space-y-2">
+            <Label>{pick({ tr: "Yenileme (dk)", en: "Refresh (min)" })}</Label>
+            <Input type="number" min={5} value={scheduleMinutes} onChange={(event) => setScheduleMinutes(event.target.value)} placeholder="—" />
+          </div>
+          <div className="flex items-end">
+            <Button
+              variant="outline"
+              disabled={!Object.keys(changes).length || updateMutation.isPending}
+              onClick={() => updateMutation.mutate()}
+            >
+              <SaveIcon />
+              {pick({ tr: "Ayarları Kaydet", en: "Save Settings" })}
+            </Button>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
 }
 
 const SAMPLE_BATCH_TEMPLATES = [

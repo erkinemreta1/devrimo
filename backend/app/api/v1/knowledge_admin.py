@@ -80,6 +80,10 @@ class SourceBatchCreateIn(BaseModel):
     items: list[SourceCreateIn] = Field(min_length=1, max_length=100)
 
 
+class SourceBatchPublishIn(BaseModel):
+    source_ids: list[UUID] = Field(min_length=1, max_length=100)
+
+
 class RevisionIn(BaseModel):
     config: dict[str, Any]
 
@@ -311,6 +315,72 @@ async def batch_create_sources(
         after={"created": len(created), "source_ids": [s["id"] for s in created]},
     )
     return {"items": created, "count": len(created)}
+
+
+@router.post("/sources/batch/publish")
+async def batch_publish_sources(
+    body: SourceBatchPublishIn,
+    principal: AdminPrincipal = Depends(require(AdminPermission.knowledge_write)),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    published: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
+
+    for source_id in body.source_ids:
+        try:
+            source = await _source(db, principal, source_id)
+        except HTTPException as exc:
+            failed.append({"source_id": str(source_id), "reason": exc.detail})
+            continue
+
+        statement = (
+            select(CampusSourceRevision)
+            .where(CampusSourceRevision.source_id == source.id)
+            .order_by(CampusSourceRevision.revision.desc())
+        )
+        revisions = (await db.execute(statement)).scalars().all()
+        candidate = next((r for r in revisions if r.validation.get("ok")), None)
+        if not candidate:
+            failed.append({
+                "source_id": str(source.id),
+                "name": source.name,
+                "reason": "No valid revision available to publish",
+            })
+            continue
+
+        try:
+            job = await registry.publish_revision(db, source, candidate)
+            published.append({
+                "source_id": str(source.id),
+                "name": source.name,
+                "revision": candidate.revision,
+                "job_id": str(job.id),
+            })
+        except ValueError as exc:
+            failed.append({
+                "source_id": str(source.id),
+                "name": source.name,
+                "reason": str(exc),
+            })
+
+    await record_event(
+        db,
+        actor_user_id=principal.user.id,
+        organization_id=_org(principal),
+        action="knowledge_source.batch_publish",
+        result="success" if published else "failed",
+        after={
+            "published_count": len(published),
+            "failed_count": len(failed),
+            "published_source_ids": [p["source_id"] for p in published],
+        },
+    )
+
+    return {
+        "published": published,
+        "failed": failed,
+        "count": len(published),
+    }
 
 
 @router.put("/sources/bulk")

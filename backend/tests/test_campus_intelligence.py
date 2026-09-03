@@ -637,3 +637,72 @@ async def test_batch_create_sources(client, monkeypatch):
     )
     assert empty_res.status_code == 422
 
+
+async def test_batch_publish_sources(client, monkeypatch) -> None:
+    admin_id = new_user_id()
+    monkeypatch.setattr(get_settings(), "admin_bootstrap_user_ids", str(admin_id))
+    await client.get("/api/v1/profile", headers=auth_header(admin_id))
+
+    # 1. Create a batch of 2 sources
+    create_payload = {
+        "items": [
+            {
+                "name": "Batch Publish Test 1",
+                "kind": "curated",
+                "authority": 80,
+                "config": {"records": []},
+            },
+            {
+                "name": "Batch Publish Test 2",
+                "kind": "curated",
+                "authority": 85,
+                "config": {"records": []},
+            },
+        ]
+    }
+    create_res = await client.post(
+        "/api/v1/admin/sources/batch",
+        headers=auth_header(admin_id),
+        json=create_payload,
+    )
+    assert create_res.status_code == 201
+    created_items = create_res.json()["items"]
+    source_ids = [item["id"] for item in created_items]
+
+    # 2. Batch publish them
+    publish_res = await client.post(
+        "/api/v1/admin/sources/batch/publish",
+        headers=auth_header(admin_id),
+        json={"source_ids": source_ids},
+    )
+    assert publish_res.status_code == 200
+    publish_data = publish_res.json()
+    assert publish_data["count"] == 2
+    assert len(publish_data["published"]) == 2
+    assert len(publish_data["failed"]) == 0
+    assert {p["source_id"] for p in publish_data["published"]} == set(source_ids)
+
+    # 3. Verify each source is now published
+    for sid in source_ids:
+        source_res = await client.get(
+            f"/api/v1/admin/sources/{sid}",
+            headers=auth_header(admin_id),
+        )
+        assert source_res.status_code == 200
+        data = source_res.json()
+        assert data["status"] == "published"
+        assert data["active_revision_id"] is not None
+
+    # 4. Try publishing an invalid non-existent source ID
+    non_existent_id = str(new_user_id())
+    mixed_res = await client.post(
+        "/api/v1/admin/sources/batch/publish",
+        headers=auth_header(admin_id),
+        json={"source_ids": [non_existent_id]},
+    )
+    assert mixed_res.status_code == 200
+    mixed_data = mixed_res.json()
+    assert mixed_data["count"] == 0
+    assert len(mixed_data["failed"]) == 1
+    assert mixed_data["failed"][0]["source_id"] == non_existent_id
+
