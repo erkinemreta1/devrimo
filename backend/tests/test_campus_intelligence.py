@@ -20,10 +20,11 @@ from app.db.models import (
 )
 from app.db.session import SessionLocal
 from app.knowledge.adapters import adapter_for
+from app.knowledge.chunking import chunk_records, embedding_text, validate_chunk_config
 from app.knowledge.fetcher import FetchPolicy, FetchRejected, fetch_document
 from app.knowledge.ingestion import claim_job, process_job
 from app.knowledge.retrieval import read_campus_page, search_knowledge
-from app.knowledge.types import FetchedDocument
+from app.knowledge.types import FetchedDocument, ParsedRecord
 from app.planning.service import _prerequisite_met, upsert_academic_snapshot
 from tests.conftest import auth_header, new_user_id
 
@@ -804,3 +805,134 @@ async def test_search_ranks_by_relevance_not_by_scan_order():
         results = await search_knowledge(db, "burs başvurusu", organization_id=org.id, limit=5)
         assert results
         assert results[0]["document_id"] == "target"
+
+
+async def test_authority_and_recency_cannot_outrank_a_better_match():
+    """Priors settle near-ties; they must not reorder the actual ranking.
+
+    Reciprocal Rank Fusion produces scores in a narrow band, so an additive
+    authority/freshness bonus that is large relative to one rank step becomes
+    the primary sort key. That regression put a maximum-authority, freshly
+    published announcement above the only document that mentioned the query.
+    """
+    org = Organization(id=uuid4(), slug=f"rank-{uuid4().hex[:8]}", name="Ranking campus")
+    loud = CampusSource(
+        id=uuid4(),
+        organization_id=org.id,
+        name="Loud but irrelevant",
+        kind="curated",
+        status="published",
+        enabled=True,
+    )
+    quiet = CampusSource(
+        id=uuid4(),
+        organization_id=org.id,
+        name="Quiet but relevant",
+        kind="curated",
+        status="published",
+        enabled=True,
+    )
+    revisions = [
+        CampusSourceRevision(id=uuid4(), source_id=source.id, revision=1, status="published", config={})
+        for source in (loud, quiet)
+    ]
+    records = [
+        CampusKnowledgeRecord(
+            source_id=loud.id,
+            source_revision_id=revisions[0].id,
+            external_id="loud",
+            record_type="announcement",
+            title="Genel duyurular",
+            content="Mezuniyet töreni ve yemekhane menüsü hakkinda genel duyurular yayinlandi.",
+            language="tr",
+            authority=100,
+            published_at=datetime.now(UTC),
+            content_hash=hashlib.sha256(b"loud").hexdigest(),
+        ),
+        CampusKnowledgeRecord(
+            source_id=quiet.id,
+            source_revision_id=revisions[1].id,
+            external_id="quiet",
+            record_type="guide",
+            title="Kablosuz ag rehberi",
+            content="Meturoam kablosuz ag baglantisi icin kurulum adimlari ve sorun giderme.",
+            language="tr",
+            authority=10,
+            published_at=datetime.now(UTC) - timedelta(days=400),
+            content_hash=hashlib.sha256(b"quiet").hexdigest(),
+        ),
+    ]
+    async with SessionLocal() as db:
+        db.add(org)
+        await db.flush()
+        db.add_all([loud, quiet])
+        await db.flush()
+        db.add_all(revisions)
+        await db.flush()
+        db.add_all(records)
+        await db.commit()
+
+        results = await search_knowledge(db, "meturoam", organization_id=org.id, limit=5)
+        assert results, "the relevant document was not returned at all"
+        assert results[0]["document_id"] == "quiet", (
+            f"authority {results[0]['authority']} outranked the matching document: "
+            f"{[(r['document_id'], r['score']) for r in results]}"
+        )
+
+
+def test_long_pages_split_into_section_aware_chunks_that_rebuild_losslessly():
+    """A page must be indexed as retrieval-sized pieces, not one vector.
+
+    Each chunk owns its text exactly once so the document can be reconstructed
+    verbatim, while the overlap that helps embedding quality is carried in
+    metadata rather than duplicated into the stored content.
+    """
+    # Distinct sentences, so "appears exactly once" is a meaningful assertion.
+    opening = [f"Kutuphane {index} numarali calisma salonu sabah acilir." for index in range(14)]
+    exams = [f"Sinav doneminde {index} numarali salon gece yarisina kadar aciktir." for index in range(14)]
+    body = "\n".join(["# Kutuphane", *opening, "## Sinav donemi", *exams])
+    record = ParsedRecord(
+        external_id="library-page",
+        record_type="guide",
+        title="Kutuphane rehberi",
+        content=body,
+        url="https://lib.metu.edu.tr/",
+    )
+
+    chunks = chunk_records([record], {"chunk_max_chars": 600})
+    assert len(chunks) > 1, "a long page was left as a single record"
+    assert all(len(chunk.content) <= 600 for chunk in chunks)
+
+    # Every chunk is addressable, ordered, and knows how many siblings it has.
+    assert [chunk.metadata["chunk_index"] for chunk in chunks] == list(range(len(chunks)))
+    assert {chunk.metadata["chunk_count"] for chunk in chunks} == {len(chunks)}
+    assert all(chunk.metadata["parent_external_id"] == "library-page" for chunk in chunks)
+    assert len({chunk.external_id for chunk in chunks}) == len(chunks)
+    assert {chunk.metadata.get("section") for chunk in chunks} & {"Kutuphane", "Kutuphane \u203a Sinav donemi"}
+
+    # Stored content is partitioned, not overlapped: reconstruction is lossless
+    # and no sentence is indexed twice.
+    combined = "\n\n".join(chunk.content for chunk in chunks)
+    for sentence in opening + exams:
+        assert combined.count(sentence) == 1, f"{sentence!r} was not stored exactly once"
+
+    # The overlap that helps embedding quality lives in metadata only.
+    assert any(chunk.metadata.get("context_before") for chunk in chunks[1:])
+
+    # The text handed to the embedder is enriched; the stored chunk is not.
+    enriched = embedding_text(
+        title=chunks[1].title,
+        summary=None,
+        content=chunks[1].content,
+        metadata=chunks[1].metadata,
+    )
+    assert chunks[1].content in enriched
+    assert "Document: Kutuphane rehberi" in enriched
+    assert len(enriched) > len(chunks[1].content)
+
+
+def test_chunking_rejects_out_of_range_configuration():
+    """Admin-supplied chunk sizes are validated before a revision publishes."""
+    assert validate_chunk_config({"chunk_max_chars": 1800}) == []
+    assert validate_chunk_config({"chunk_max_chars": 10}), "an absurd size must be rejected"
+    assert validate_chunk_config({"chunk_max_chars": "big"}), "a non-integer must be rejected"
