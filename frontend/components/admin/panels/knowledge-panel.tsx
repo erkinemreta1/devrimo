@@ -430,8 +430,8 @@ function CreateSourceDialog({ open, onOpenChange, onDone }: { open: boolean; onO
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl">
-        <DialogHeader>
+      <DialogContent className="sm:max-w-3xl max-h-[88vh] flex flex-col p-0 overflow-hidden">
+        <DialogHeader className="p-6 pb-2 shrink-0">
           <DialogTitle>{pick({ tr: "Kampüs kaynağı ekle", en: "Add campus source" })}</DialogTitle>
           <DialogDescription>
             {pick({
@@ -441,7 +441,7 @@ function CreateSourceDialog({ open, onOpenChange, onDone }: { open: boolean; onO
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex gap-2 border-b pb-3">
+        <div className="flex gap-2 border-b px-6 pb-3 shrink-0">
           <Button
             type="button"
             variant={mode === "single" ? "default" : "outline"}
@@ -461,99 +461,101 @@ function CreateSourceDialog({ open, onOpenChange, onDone }: { open: boolean; onO
           </Button>
         </div>
 
-        {mode === "single" ? (
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div className="space-y-2">
-              <Label>{pick({ tr: "Ad", en: "Name" })}</Label>
-              <Input value={name} onChange={(event) => setName(event.target.value)} />
-            </div>
-            <div className="space-y-2">
-              <Label>{pick({ tr: "Kaynak türü", en: "Source type" })}</Label>
-              <Select value={kind} onValueChange={(value) => setKind((value ?? "drupal") as typeof kind)}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {SOURCE_KINDS.map((value) => (
-                    <SelectItem key={value} value={value}>{value.replaceAll("_", " ")}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2 sm:col-span-2">
-              <Label>URL</Label>
-              <Input value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://…" />
-            </div>
-            <div className="space-y-2">
-              <Label>{pick({ tr: "İçerik türü", en: "Content type" })}</Label>
-              <Select value={recordType} onValueChange={(value) => setRecordType(value ?? "announcement")}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {["announcement", "calendar", "event", "service_status", "guide", "course", "policy"].map((value) => (
-                    <SelectItem key={value} value={value}>{value.replaceAll("_", " ")}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2 sm:col-span-2">
-              <Label>{pick({ tr: "Gelişmiş çıkarma ayarları", en: "Advanced extraction settings" })}</Label>
-              <Textarea className="min-h-28 font-mono text-xs" value={config} onChange={(event) => setConfig(event.target.value)} />
-              <p className={cn("text-xs text-muted-foreground", !validConfig && "text-destructive")}>
-                {validConfig
-                  ? pick({ tr: "Seçiciler ve alan eşlemeleri için isteğe bağlı JSON nesnesi.", en: "Optional JSON object for selectors and field mappings." })
-                  : pick({ tr: "Geçerli bir JSON nesnesi gerekli.", en: "A valid JSON object is required." })}
-              </p>
-            </div>
-          </div>
-        ) : (
-          <div className="space-y-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <Label>{pick({ tr: "JSON Kaynak Dizisi", en: "JSON Source Array" })}</Label>
-              <div className="flex items-center gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setBatchJson(JSON.stringify(SAMPLE_BATCH_TEMPLATES, null, 2))}
-                >
-                  <SparklesIcon className="size-3.5 text-primary" />
-                  {pick({ tr: "Örnek şablonları yükle", en: "Load sample templates" })}
-                </Button>
-                {batchJson ? (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setBatchJson("")}
-                  >
-                    {pick({ tr: "Temizle", en: "Clear" })}
-                  </Button>
-                ) : null}
+        <div className="flex-1 overflow-y-auto px-6 py-4">
+          {mode === "single" ? (
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label>{pick({ tr: "Ad", en: "Name" })}</Label>
+                <Input value={name} onChange={(event) => setName(event.target.value)} />
+              </div>
+              <div className="space-y-2">
+                <Label>{pick({ tr: "Kaynak türü", en: "Source type" })}</Label>
+                <Select value={kind} onValueChange={(value) => setKind((value ?? "drupal") as typeof kind)}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {SOURCE_KINDS.map((value) => (
+                      <SelectItem key={value} value={value}>{value.replaceAll("_", " ")}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2 sm:col-span-2">
+                <Label>URL</Label>
+                <Input value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://…" />
+              </div>
+              <div className="space-y-2">
+                <Label>{pick({ tr: "İçerik türü", en: "Content type" })}</Label>
+                <Select value={recordType} onValueChange={(value) => setRecordType(value ?? "announcement")}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {["announcement", "calendar", "event", "service_status", "guide", "course", "policy"].map((value) => (
+                      <SelectItem key={value} value={value}>{value.replaceAll("_", " ")}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2 sm:col-span-2">
+                <Label>{pick({ tr: "Gelişmiş çıkarma ayarları", en: "Advanced extraction settings" })}</Label>
+                <Textarea className="min-h-28 font-mono text-xs" value={config} onChange={(event) => setConfig(event.target.value)} />
+                <p className={cn("text-xs text-muted-foreground", !validConfig && "text-destructive")}>
+                  {validConfig
+                    ? pick({ tr: "Seçiciler ve alan eşlemeleri için isteğe bağlı JSON nesnesi.", en: "Optional JSON object for selectors and field mappings." })
+                    : pick({ tr: "Geçerli bir JSON nesnesi gerekli.", en: "A valid JSON object is required." })}
+                </p>
               </div>
             </div>
+          ) : (
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <Label>{pick({ tr: "JSON Kaynak Dizisi", en: "JSON Source Array" })}</Label>
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setBatchJson(JSON.stringify(SAMPLE_BATCH_TEMPLATES, null, 2))}
+                  >
+                    <SparklesIcon className="size-3.5 text-primary" />
+                    {pick({ tr: "Örnek şablonları yükle", en: "Load sample templates" })}
+                  </Button>
+                  {batchJson ? (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setBatchJson("")}
+                    >
+                      {pick({ tr: "Temizle", en: "Clear" })}
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
 
-            <Textarea
-              className="min-h-60 font-mono text-xs leading-relaxed"
-              value={batchJson}
-              onChange={(event) => setBatchJson(event.target.value)}
-              placeholder={`[\n  {\n    "name": "METU Cafeteria",\n    "kind": "drupal",\n    "url": "https://kafeterya.metu.edu.tr",\n    "authority": 95,\n    "config": { ... }\n  }\n]`}
-            />
+              <Textarea
+                className="h-64 min-h-[14rem] max-h-[42vh] w-full resize-y font-mono text-xs leading-relaxed"
+                value={batchJson}
+                onChange={(event) => setBatchJson(event.target.value)}
+                placeholder={`[\n  {\n    "name": "METU Cafeteria",\n    "kind": "drupal",\n    "url": "https://kafeterya.metu.edu.tr",\n    "authority": 95,\n    "config": { ... }\n  }\n]`}
+              />
 
-            <div className="flex items-center justify-between text-xs">
-              {batchParsed.error ? (
-                <p className="text-destructive font-medium">{batchParsed.error}</p>
-              ) : isBatchValid ? (
-                <p className="text-primary font-medium">
-                  ✓ {batchParsed.items.length} {pick({ tr: "kaynak algılandı ve hazır", en: "sources detected and ready" })}
-                </p>
-              ) : (
-                <p className="text-muted-foreground">
-                  {pick({ tr: "Kaynak nesnelerinden oluşan bir JSON dizisi girin.", en: "Enter a JSON array of source objects." })}
-                </p>
-              )}
+              <div className="flex items-center justify-between text-xs">
+                {batchParsed.error ? (
+                  <p className="text-destructive font-medium">{batchParsed.error}</p>
+                ) : isBatchValid ? (
+                  <p className="text-primary font-medium">
+                    ✓ {batchParsed.items.length} {pick({ tr: "kaynak algılandı ve hazır", en: "sources detected and ready" })}
+                  </p>
+                ) : (
+                  <p className="text-muted-foreground">
+                    {pick({ tr: "Kaynak nesnelerinden oluşan bir JSON dizisi girin.", en: "Enter a JSON array of source objects." })}
+                  </p>
+                )}
+              </div>
             </div>
-          </div>
-        )}
+          )}
+        </div>
 
-        <DialogFooter>
+        <DialogFooter className="p-4 px-6 border-t bg-muted/20 shrink-0">
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             {pick({ tr: "Vazgeç", en: "Cancel" })}
           </Button>
