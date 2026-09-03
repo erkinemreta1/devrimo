@@ -15,35 +15,18 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
-from sqlalchemy import Float, and_, case, func, literal, literal_column, or_, select, union_all
+from sqlalchemy import Float, case, func, literal, literal_column, or_, select, union_all
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import CampusKnowledgeRecord, CampusSource
 from app.knowledge.embeddings import embed_query, get_embedding_config
 
-# Reciprocal Rank Fusion. The published constant of 60 is tuned for fusing many
-# long result lists, where it usefully damps the very top of each run. This
-# corpus is small and only three channels feed the fusion, and at 60 the scores
-# for ranks 1..6 land inside a 0.0005 band -- narrow enough that a tie-breaker
-# worth 0.003 silently became the primary sort key. A smaller constant keeps
-# adjacent ranks distinguishable, so relevance stays ahead of the priors.
-RRF_K = 10
+# Reciprocal Rank Fusion. The constant damps the influence of the very top of
+# each list so a single channel cannot dominate the fused ordering.
+RRF_K = 60
 LEXICAL_WEIGHT = 0.40
 TRIGRAM_WEIGHT = 0.20
 SEMANTIC_WEIGHT = 0.40
-
-# Authority and recency are priors, not evidence: they order results that the
-# channels already consider comparable. One rank step at the top of a channel is
-# WEIGHT/((K+1)(K+2)) -- about 0.003 here -- so the priors are capped at half of
-# that. A source cannot buy more than a single rank with its authority.
-AUTHORITY_BONUS = 0.001
-FRESHNESS_BONUS = 0.0005
-
-# A vector index always returns its nearest neighbours, however far away they
-# are, so without a floor every embedded record joins the candidate set and the
-# least-bad match is presented as a good one. Measured against this corpus, an
-# on-topic chunk scores 0.58-0.69 and an off-topic one 0.42-0.55.
-MIN_SEMANTIC_SIMILARITY = 0.45
 
 # Snowball has no configuration for every language in the corpus, and a query
 # carries no language of its own, so both configurations are probed against the
@@ -247,16 +230,12 @@ async def search_knowledge(
         ),
     ]
     if query_embedding is not None:
-        distance = CampusKnowledgeRecord.embedding.cosine_distance(query_embedding)
         channels.append(
             (
                 _ranked_channel(
                     conditions,
-                    distance,
-                    and_(
-                        CampusKnowledgeRecord.embedding_model == config.model_label,
-                        distance <= 1 - MIN_SEMANTIC_SIMILARITY,
-                    ),
+                    CampusKnowledgeRecord.embedding.cosine_distance(query_embedding),
+                    CampusKnowledgeRecord.embedding_model == config.model_label,
                     candidate_limit,
                     descending=False,
                     name="semantic",
@@ -275,10 +254,10 @@ async def search_knowledge(
         .cte("fused")
     )
 
-    # Bounded above by half a rank step, so a high-authority or recent record
-    # can settle a near-tie but never overtake a genuinely better match.
-    freshness = case((CampusKnowledgeRecord.published_at >= now - FRESHNESS_WINDOW, FRESHNESS_BONUS), else_=0.0)
-    quality = (func.cast(CampusKnowledgeRecord.authority, Float) / 100) * AUTHORITY_BONUS + freshness
+    # Authority and freshness are deliberately small: they break ties between
+    # comparable matches rather than promoting a weak match from a loud source.
+    freshness = case((CampusKnowledgeRecord.published_at >= now - FRESHNESS_WINDOW, 0.001), else_=0.0)
+    quality = (func.cast(CampusKnowledgeRecord.authority, Float) / 100) * 0.002 + freshness
 
     statement = (
         base.add_columns(((fused.c.score + quality) * 100).label("final_score"))
