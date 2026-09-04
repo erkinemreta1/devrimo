@@ -568,6 +568,25 @@ class StudentAcademicSnapshot(Base):
     source: Mapped[str] = mapped_column(String(32), default="sais", nullable=False)
 
 
+class ScheduleDataCache(Base):
+    """Expiring schedule result cache. Keys and owners are one-way hashes."""
+
+    __tablename__ = "schedule_data_cache"
+    __table_args__ = (
+        Index("ix_schedule_data_cache_expires", "expires_at"),
+        Index("ix_schedule_data_cache_owner", "owner_hash"),
+    )
+
+    key_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    owner_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    namespace: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
 class CourseOffering(Base):
     __tablename__ = "course_offerings"
     __table_args__ = (

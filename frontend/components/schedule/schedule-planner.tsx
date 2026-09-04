@@ -208,7 +208,11 @@ export function SchedulePlanner() {
         // Resolved against the catalog server-side. Scanning the payload here
         // for any three-digit run used to pick up a year or a row count and
         // then quietly load another department's courses.
-        setDepartment(context.department_code ?? "");
+        // Some SAIS records expose an official abbreviation (for example EE)
+        // while the catalog lookup cannot resolve a numeric department code.
+        // The AI planner accepts that verified SAIS value, so do not leave the
+        // actionable state empty while displaying a valid department label.
+        setDepartment(context.department_code ?? context.department_query ?? "");
       })
       .catch((error) => { if (!cancelled) toast.error(error instanceof Error ? error.message : t("Bölüm SAIS'ten alınamadı.", "Department could not be loaded from SAIS.")); })
       .finally(() => { if (!cancelled) setDepartmentBusy(false); });
@@ -255,7 +259,7 @@ export function SchedulePlanner() {
   }
 
   async function requestAiPlan(courses: CatalogCourse[]) {
-    const response = await jsonFetch<{ courses?: AiPlanCourse[]; warnings?: string[]; source?: string }>("/api/schedule/ai-plan", {
+    const response = await jsonFetch<{ courses?: AiPlanCourse[]; warnings?: string[]; source?: string; cache_hit?: boolean; duration_ms?: number }>("/api/schedule/ai-plan", {
       method: "POST",
       body: {
         department: department.trim(),
@@ -273,7 +277,7 @@ export function SchedulePlanner() {
     });
     setAiSections((current) => ({ ...current, ...sectionMap }));
     const warnings = (response.warnings ?? []).filter((warning): warning is string => typeof warning === "string");
-    return { courses: verified, warnings, sections: sectionMap };
+    return { courses: verified, warnings, sections: sectionMap, cacheHit: response.cache_hit, durationMs: response.duration_ms };
   }
 
   function addPoolCourse() {
@@ -313,8 +317,10 @@ export function SchedulePlanner() {
     try {
       const result = await requestAiPlan([]);
       setCatalogCourses(result.courses);
+      const timing = typeof result.durationMs === "number" ? ` (${(result.durationMs / 1000).toFixed(1)} sn)` : "";
+      const cacheLabel = result.cacheHit ? t(" · kalıcı önbellekten", " · from persistent cache") : "";
       setCurriculumNotice(result.courses.length
-        ? t(`${result.courses.length} ders AI ajanı tarafından MCP verileriyle doğrulandı.${result.warnings.length ? ` ${result.warnings.join(" ")}` : ""}`, `${result.courses.length} courses were verified by the AI agent using MCP data.${result.warnings.length ? ` ${result.warnings.join(" ")}` : ""}`)
+        ? t(`${result.courses.length} ders AI ajanı tarafından MCP verileriyle doğrulandı${timing}${cacheLabel}.${result.warnings.length ? ` ${result.warnings.join(" ")}` : ""}`, `${result.courses.length} courses were verified by the AI agent using MCP data${timing}${cacheLabel}.${result.warnings.length ? ` ${result.warnings.join(" ")}` : ""}`)
         : t("AI ajanı bu dönem için doğrulanmış zorunlu ders bulamadı.", "The AI agent found no verified required courses for this term."));
     } catch (error) {
       toast.error(t(`Alman gereken dersler getirilemedi: ${error instanceof Error ? error.message : "Bilinmeyen hata"}`, `Required courses failed: ${error instanceof Error ? error.message : "Unknown error"}`));
