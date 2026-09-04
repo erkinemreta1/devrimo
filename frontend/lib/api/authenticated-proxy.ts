@@ -8,7 +8,7 @@ export type ProxyContext = { params: Promise<{ path: string[] }> };
 export async function proxyAuthenticatedRequest(
   request: NextRequest,
   context: ProxyContext,
-  namespace: "admin" | "student",
+  namespace: "admin" | "schedule" | "student",
 ) {
   const result = await requireAuth();
   if ("error" in result) return result.error;

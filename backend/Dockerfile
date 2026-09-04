@@ -85,10 +85,26 @@ RUN set -eux; \
         uv venv --python 3.11 "/opt/mcp/${slug}/.venv"; \
     done
 
-# Upstream currently skips a meeting table when it is nested in the same row
-# as the section button. Keep the pinned source reproducible while applying
-# the narrow parser correction before building its wheel.
-COPY vendor_patches/course_info/sais_client.py /opt/mcp/course-info/src/metu_course_info_mcp/sais_client.py
+# Upstream currently skips a meeting table when it is nested in the same row as
+# the section button. The correction is applied to the pinned source before its
+# wheel is built.
+#
+# Two things this must not do quietly. It must not silently no-op: `COPY` to a
+# path creates missing parents, so if upstream ever moves the module the patch
+# would land somewhere harmless and the build would still succeed with the bug
+# in it — hence the `test -f`. And it must not make the manifest lie: the block
+# above exists so a running container can answer "which commit is serving
+# this?", and an image carrying an undeclared source change no longer matches
+# the commit it names, so the patch gets its own manifest line (slug, content
+# hash, origin) and is reported by GET /health alongside the pins.
+COPY vendor_patches/course_info/sais_client.py /tmp/course_info_sais_client.py
+RUN set -eux; \
+    target=/opt/mcp/course-info/src/metu_course_info_mcp/sais_client.py; \
+    test -f "${target}"; \
+    cp /tmp/course_info_sais_client.py "${target}"; \
+    rm /tmp/course_info_sais_client.py; \
+    printf 'course-info-patch %s vendor_patches/course_info/sais_client.py\n' \
+        "$(sha256sum "${target}" | cut -d" " -f1)" >> /opt/mcp/MANIFEST
 
 # Installed as a built wheel, not `-e`, so nothing at runtime depends on the
 # source tree layout surviving. metu-odtuclass-mcp ships loose modules and a

@@ -37,7 +37,7 @@ from app.config import get_settings
 from app.db.models import ChatSession
 from app.db.session import SessionLocal, get_db
 from app.logging import get_logger
-from app.observability import capture, llm_turn, new_trace_id
+from app.observability import llm_turn, new_trace_id
 from app.observability.turns import TurnObservation
 from app.schemas import ChatCompletionsRequestIn, ChatConfirmationIn
 
@@ -206,24 +206,6 @@ async def _serialize_run(
         yield chunk
 
 
-async def _turn_lock_heartbeat(agent_id, owner: str, stop_event: asyncio.Event) -> None:
-    settings = get_settings()
-    interval = max(1, min(settings.turn_lock_heartbeat_seconds, settings.turn_lock_lease_seconds // 2))
-    while not stop_event.is_set():
-        try:
-            await asyncio.wait_for(stop_event.wait(), timeout=interval)
-            return
-        except TimeoutError:
-            async with SessionLocal() as db:
-                if not await manager.renew_turn_lock(db, agent_id, owner):
-                    # Another replica has taken the lock mid-turn. The turn
-                    # keeps streaming but is no longer protected, so this is
-                    # the signal that two replicas raced.
-                    logger.error("turn_lock_heartbeat_lost", agent_id=str(agent_id))
-                    capture("turn_lock_heartbeat_lost", agent_id=str(agent_id), lock_owner=owner)
-                    return
-
-
 async def _with_keepalive(source: AsyncIterator[bytes]) -> AsyncIterator[bytes]:
     """Interleave SSE comments so no proxy in the path times out a slow tool call.
 
@@ -321,7 +303,7 @@ async def chat_completions(
 
     async def stream() -> AsyncIterator[bytes]:
         heartbeat_stop = asyncio.Event()
-        heartbeat = asyncio.create_task(_turn_lock_heartbeat(agent.id, lock_owner, heartbeat_stop))
+        heartbeat = asyncio.create_task(manager.turn_lock_heartbeat(agent.id, lock_owner, heartbeat_stop))
         observation = TurnObservation(
             trace_id=trace_id,
             user_id=str(user_id),
@@ -437,7 +419,7 @@ async def confirm_tool_call(
 
     async def stream() -> AsyncIterator[bytes]:
         heartbeat_stop = asyncio.Event()
-        heartbeat = asyncio.create_task(_turn_lock_heartbeat(agent.id, lock_owner, heartbeat_stop))
+        heartbeat = asyncio.create_task(manager.turn_lock_heartbeat(agent.id, lock_owner, heartbeat_stop))
         observation = TurnObservation(
             trace_id=trace_id,
             user_id=str(user.id),

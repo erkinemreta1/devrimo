@@ -1,6 +1,18 @@
 from fastapi import APIRouter
 
-from app.api.v1 import admin, agents, campus, chat, health, knowledge_admin, memories, profile, schedule, sessions, student
+from app.api.v1 import (
+    admin,
+    agents,
+    campus,
+    chat,
+    health,
+    knowledge_admin,
+    memories,
+    profile,
+    schedule,
+    sessions,
+    student,
+)
 
 router = APIRouter()
 router.include_router(health.router, tags=["health"])

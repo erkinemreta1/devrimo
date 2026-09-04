@@ -16,6 +16,10 @@ nothing was lost.
 ``destroying``    being torn down
 """
 
+import asyncio
+import contextlib
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
@@ -29,8 +33,9 @@ from app.agents.runtime import get_runtime_config
 from app.campus import service as campus_service
 from app.config import get_settings
 from app.db.models import Agent, AgentStatus
+from app.db.session import SessionLocal
 from app.logging import get_logger
-from app.observability import capture_exception
+from app.observability import capture, capture_exception
 
 logger = get_logger(__name__)
 
@@ -257,6 +262,68 @@ async def release_turn_lock(db: AsyncSession, agent: Agent, owner: str) -> None:
         .execution_options(synchronize_session=False)
     )
     await db.commit()
+
+
+async def release_turn_lock_isolated(agent_id, owner: str) -> None:
+    """Release a turn lock on a session of its own.
+
+    A handler whose run failed can be holding a request session that is stuck
+    mid-transaction, and releasing the lock through it would raise instead —
+    stranding the agent as busy for the rest of the lease. Cleanup gets a fresh
+    session so it cannot be taken down by whatever went wrong.
+    """
+    async with SessionLocal() as db:
+        await db.execute(
+            update(Agent)
+            .where(Agent.id == agent_id, Agent.turn_lock_owner == owner)
+            .values(turn_lock_until=None, turn_lock_owner=None)
+            .execution_options(synchronize_session=False)
+        )
+        await db.commit()
+
+
+async def turn_lock_heartbeat(agent_id, owner: str, stop_event: asyncio.Event) -> None:
+    """Renew a held turn lock until ``stop_event`` is set.
+
+    The lease is deliberately short so a crashed replica cannot strand an
+    agent, which means *every* holder has to renew: a run that takes longer
+    than ``turn_lock_lease_seconds`` and does not heartbeat simply loses the
+    lock while it is still running, and the next request is free to drive the
+    same resident agent concurrently.
+    """
+    settings = get_settings()
+    interval = max(1, min(settings.turn_lock_heartbeat_seconds, settings.turn_lock_lease_seconds // 2))
+    while not stop_event.is_set():
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=interval)
+            return
+        except TimeoutError:
+            async with SessionLocal() as db:
+                if not await renew_turn_lock(db, agent_id, owner):
+                    # Another replica has taken the lock mid-turn. The turn
+                    # keeps running but is no longer protected, so this is the
+                    # signal that two replicas raced.
+                    logger.error("turn_lock_heartbeat_lost", agent_id=str(agent_id))
+                    capture("turn_lock_heartbeat_lost", agent_id=str(agent_id), lock_owner=owner)
+                    return
+
+
+@asynccontextmanager
+async def turn_lock_held(agent_id, owner: str) -> AsyncIterator[None]:
+    """Heartbeat a turn lock for as long as the body runs.
+
+    For callers that await a single bounded operation. Streaming turns drive
+    :func:`turn_lock_heartbeat` directly because their lock outlives the
+    handler that took it.
+    """
+    stop_event = asyncio.Event()
+    heartbeat = asyncio.create_task(turn_lock_heartbeat(agent_id, owner, stop_event))
+    try:
+        yield
+    finally:
+        stop_event.set()
+        with contextlib.suppress(asyncio.CancelledError):
+            await heartbeat
 
 
 async def touch_last_active(db: AsyncSession, agent: Agent) -> None:

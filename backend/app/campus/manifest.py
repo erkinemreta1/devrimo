@@ -23,7 +23,14 @@ MANIFEST_NAME = "MANIFEST"
 
 @dataclass(frozen=True)
 class BuildRecord:
-    """One campus server as it was built into this image."""
+    """One entry in the build record: a pinned server, or a patch applied to one.
+
+    A pinned server records ``(slug, commit, repo)``. A source patch applied on
+    top of a pin records ``(slug + "-patch", content hash, source path)`` — an
+    image carrying an undeclared source change would otherwise report a commit
+    it does not actually contain, which is exactly the gap this file exists to
+    close.
+    """
 
     slug: str
     commit: str

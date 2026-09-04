@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user
 from app.auth.jwt import AuthenticatedUser
+from app.campus.course_info import forget_user
 from app.db.models import StudentAcademicSnapshot, StudentContext, UserPreference, UserUpdateState
 from app.db.session import get_db
 from app.logging import get_logger
@@ -125,15 +126,23 @@ async def academic_data_sync(
     try:
         # A transcript describes accumulated course history. Reuse the newest
         # snapshot across planning terms until the user explicitly refreshes it.
+        # A student with nothing on their transcript yet still syncs
+        # successfully: the reply carries an empty snapshot, not an error.
         if body.force or latest_snapshot is None:
-            if not await sync_planning_snapshot_from_sais(user.id, body.term):
-                raise RuntimeError("SAIS did not return an academic snapshot")
+            reached_sais = await sync_planning_snapshot_from_sais(user.id, body.term)
         elif context is None or not (context.department or context.program_code):
-            if not await sync_student_context_from_sais(user.id):
-                raise RuntimeError("SAIS did not return student context")
+            reached_sais = await sync_student_context_from_sais(user.id)
+        else:
+            reached_sais = True
     except Exception as exc:
         logger.warning("academic_data_sync_failed", user_id=str(user.id), error=str(exc))
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Academic data could not be fetched from SAIS") from exc
+    if not reached_sais:
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            "SAIS did not answer. Check that your METU connection is still valid, then try again.",
+        )
+    forget_user(user.id)
     await db.rollback()
     return await _academic_data_out(db, user.id)
 
@@ -145,6 +154,9 @@ async def academic_data_delete(
     await db.execute(delete(StudentAcademicSnapshot).where(StudentAcademicSnapshot.user_id == user.id))
     await db.execute(delete(StudentContext).where(StudentContext.user_id == user.id))
     await db.commit()
+    # Removing the rows is not enough on its own: the catalog cache still holds
+    # answers derived from this student's department until they expire.
+    forget_user(user.id)
     return {"deleted": True}
 
 

@@ -69,15 +69,16 @@ function parseCourses(value: unknown): CatalogCourse[] {
   });
 }
 
+// Full METU codes are globally unique, so a course's identity is its whole
+// code. Reducing it to the final three digits would confuse a service course
+// with a home-department one: two unrelated departments both have a 201.
 function courseIdentity(code: string) {
-  const compact = code.toUpperCase().replace(/[^A-Z0-9]/g, "");
-  // Full METU codes are globally unique. Reducing them to the final three
-  // digits confuses service courses with home-department courses (e.g. two
-  // unrelated departments can both have a 201).
-  if (/^\d{7}$/.test(compact)) return compact;
-  return compact;
+  return code.toUpperCase().replace(/[^A-Z0-9]/g, "");
 }
 
+// The first three digits of a seven-digit code name the department that owns
+// the course. Anything shorter does not say, and the backend resolves it
+// against the catalog rather than assuming the student's own department.
 function owningDepartment(courseCode: string, fallback: string) {
   const digits = courseCode.replace(/\D/g, "");
   return digits.length === 7 ? digits.slice(0, 3) : fallback;
@@ -86,31 +87,6 @@ function owningDepartment(courseCode: string, fallback: string) {
 function belongsToDepartment(course: CatalogCourse, department: string) {
   const digits = course.rawCode.replace(/\D/g, "");
   return digits.length !== 7 || digits.startsWith(department);
-}
-
-function parseDepartmentCode(value: unknown, query = "") {
-  const alias = query.trim().toUpperCase().replace(/[^A-Z]/g, "");
-  const knownCodes: Record<string, string> = { EE: "567", EEE: "567", CENG: "571", AEE: "572" };
-  if (knownCodes[alias]) return knownCodes[alias];
-  if (alias.includes("ELECTRICAL") && alias.includes("ELECTRONICS")) return "567";
-  if (alias.includes("COMPUTER") && alias.includes("ENGINEERING")) return "571";
-  if (alias.includes("AEROSPACE")) return "572";
-  const records: Record<string, unknown>[] = [];
-  const visit = (item: unknown) => {
-    if (Array.isArray(item)) return item.forEach(visit);
-    if (!item || typeof item !== "object") return;
-    const record = item as Record<string, unknown>;
-    records.push(record);
-    Object.values(record).forEach(visit);
-  };
-  visit(value);
-  for (const record of records) {
-    const candidate = String(keyValue(record, ["departmentcode", "deptcode", "programcode", "code"]) ?? "").trim();
-    const digits = candidate.match(/\b\d{3}\b/)?.[0];
-    if (digits) return digits;
-  }
-  const text = JSON.stringify(value);
-  return text.match(/\b\d{3}\b/)?.[0] ?? "";
 }
 
 function parseDay(value: string): Day | null {
@@ -225,11 +201,14 @@ export function SchedulePlanner() {
 
   useEffect(() => {
     let cancelled = false;
-    void jsonFetch<{ department_query: string | null; department_code: string | null; departments: unknown }>("/api/schedule/student-context")
+    void jsonFetch<{ department_query: string | null; department_code: string | null }>("/api/schedule/student-context")
       .then((context) => {
         if (cancelled) return;
         setDepartmentLabel(context.department_query ?? "");
-        setDepartment(context.department_code?.match(/\b\d{3}\b/)?.[0] || parseDepartmentCode(context.departments, context.department_query ?? "") || context.department_query?.match(/\b\d{3}\b/)?.[0] || "");
+        // Resolved against the catalog server-side. Scanning the payload here
+        // for any three-digit run used to pick up a year or a row count and
+        // then quietly load another department's courses.
+        setDepartment(context.department_code ?? "");
       })
       .catch((error) => { if (!cancelled) toast.error(error instanceof Error ? error.message : t("Bölüm SAIS'ten alınamadı.", "Department could not be loaded from SAIS.")); })
       .finally(() => { if (!cancelled) setDepartmentBusy(false); });
@@ -281,7 +260,7 @@ export function SchedulePlanner() {
       body: {
         department: department.trim(),
         semester: term,
-        courses: courses.map((course) => ({ code: course.rawCode, name: course.name })),
+        courses: courses.map((course) => ({ code: course.rawCode })),
       },
     });
     const sectionMap: Record<string, CatalogSection[]> = {};
@@ -367,10 +346,15 @@ export function SchedulePlanner() {
       const missing: string[] = [];
       for (const course of catalogCourses) {
         const sections = aiSections[courseIdentity(course.rawCode)] ?? [];
-        const chosen = sections.find((section) => section.meetings.length > 0 && (!avoidConflicts || section.meetings.every((meeting) => {
-          const candidate = { day: meeting.day, start: meeting.start, duration: meeting.duration } as Entry;
-          return emptyDay !== meeting.day && generated.every((entry) => !overlaps(entry, candidate));
-        })));
+        // Two independent preferences: the empty day is respected whether or
+        // not conflict prevention is on, which is what addEntry already does.
+        const chosen = sections.find((section) =>
+          section.meetings.length > 0
+          && section.meetings.every((meeting) => emptyDay !== meeting.day)
+          && (!avoidConflicts || section.meetings.every((meeting) => {
+            const candidate = { day: meeting.day, start: meeting.start, duration: meeting.duration } as Entry;
+            return generated.every((entry) => !overlaps(entry, candidate));
+          })));
         if (!chosen) { missing.push(course.code); continue; }
         generated.push(...chosen.meetings.map((meeting, index) => ({ id: crypto.randomUUID(), code: course.code, name: course.name, section: chosen.section, credits: index === 0 ? course.credits : 0, color: generated.length % COLORS.length, kind: "course" as const, ...meeting })));
       }
@@ -463,7 +447,7 @@ export function SchedulePlanner() {
               <Button variant="outline" onClick={() => void loadCatalogCourses()} disabled={catalogBusy}>{t("Bölümde açılan tüm dersler", "All offered department courses")}</Button>
               {activeStep === "courses" ? <div className="overflow-hidden rounded-xl border bg-primary/5 p-3" role="status" aria-live="polite"><div className="flex items-center gap-3"><span className="relative flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/10"><span className="absolute inset-0 animate-ping rounded-full bg-primary/10" /><Loader2Icon className="relative size-5 animate-spin text-primary" /></span><div className="min-w-0 flex-1"><p className="text-sm font-medium">{t("Ders listen hazırlanıyor", "Preparing your course list")}</p><p className="mt-0.5 text-xs text-muted-foreground">{waitSeconds < 15 ? t("Transcript ve öğrenci bilgileri kontrol ediliyor…", "Checking transcript and student information…") : waitSeconds < 40 ? t("Tamamlanmamış müfredat gereklilikleri eşleştiriliyor…", "Matching unmet curriculum requirements…") : t(`${term} döneminde açılan dersler doğrulanıyor…`, `Verifying courses offered in ${term}…`)}</p></div><span className="text-xs tabular-nums text-muted-foreground">{waitSeconds} sn</span></div><div className="mt-3 h-1.5 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-primary transition-[width] duration-1000 ease-out" style={{ width: `${Math.min(92, 10 + waitSeconds * 1.35)}%` }} /></div><p className="mt-2 text-[11px] text-muted-foreground">{t("Sayfayı açık bırak; sonuç hazır olduğunda liste otomatik görünecek.", "Keep this page open; the list will appear automatically when ready.")}</p></div> : null}
               {curriculumNotice ? <p className="rounded-lg border bg-muted/30 p-2 text-xs leading-5 text-muted-foreground">{curriculumNotice}</p> : null}
-              <div className="rounded-lg border bg-muted/20 p-2"><p className="mb-2 text-xs font-medium">{t("Ders havuzuna elle ekle", "Add manually to course pool")}</p><div className="grid gap-2"><Input value={poolDraft.code} onChange={(e) => setPoolDraft({ ...poolDraft, code: e.target.value })} placeholder="5670201 / EE201" /><Input value={poolDraft.name} onChange={(e) => setPoolDraft({ ...poolDraft, name: e.target.value })} placeholder={t("Ders adı (isteğe bağlı)", "Course name (optional)")} /><Button size="sm" variant="outline" onClick={addPoolCourse}><PlusIcon />{t("Ders havuzuna ekle", "Add to course pool")}</Button></div></div>
+              <div className="rounded-lg border bg-muted/20 p-2"><p className="mb-2 text-xs font-medium">{t("Ders havuzuna elle ekle", "Add manually to course pool")}</p><div className="grid gap-2"><Input value={poolDraft.code} onChange={(e) => setPoolDraft({ ...poolDraft, code: e.target.value })} placeholder={t("5670201 (yedi haneli kod)", "5670201 (seven-digit code)")} /><Input value={poolDraft.name} onChange={(e) => setPoolDraft({ ...poolDraft, name: e.target.value })} placeholder={t("Ders adı (isteğe bağlı)", "Course name (optional)")} /><Button size="sm" variant="outline" onClick={addPoolCourse}><PlusIcon />{t("Ders havuzuna ekle", "Add to course pool")}</Button></div></div>
               {catalogCourses.length ? <><div className="flex items-center gap-2"><Input value={catalogSearch} onChange={(e) => setCatalogSearch(e.target.value)} placeholder={t("Ders kodu veya adı ara", "Search course code or name")} /><Button variant="outline" className="shrink-0 text-destructive" onClick={clearCoursePool}><Trash2Icon />{t("Tümünü sil", "Clear all")}</Button></div><div className="max-h-64 space-y-1 overflow-y-auto">{catalogCourses.filter((course) => `${course.code} ${course.name}`.toLowerCase().includes(catalogSearch.toLowerCase())).map((course) => <div key={course.rawCode} className={cn("flex items-center gap-1 rounded-lg border p-1 transition hover:bg-accent", selectedCourse?.rawCode === course.rawCode && "border-primary bg-primary/5")}><button onClick={() => void loadSections(course)} className="min-w-0 flex-1 p-1 text-left text-sm"><span className="block font-semibold">{course.code}</span><span className="block truncate text-xs text-muted-foreground">{course.name}</span></button><Button size="icon" variant="ghost" aria-label={t(`${course.code} dersini havuzdan çıkar`, `Remove ${course.code} from course pool`)} onClick={() => removePoolCourse(course)}><Trash2Icon /></Button></div>)}</div></> : null}
               {activeStep === "sections" ? <p className="text-xs text-muted-foreground">{t("2. Seçilen dersin şubeleri ve saatleri getiriliyor…", "2. Loading sections and times for the selected course…")}</p> : null}
               {selectedCourse && catalogSections.length ? <div className="space-y-2 border-t pt-3"><p className="text-sm font-semibold">2. {selectedCourse.code} · {t("Şubeler", "Sections")}</p>{catalogSections.map((section) => <button key={section.section} onClick={() => addCatalogSection(section)} className="w-full rounded-lg border p-2 text-left text-sm transition hover:border-primary/40 hover:bg-primary/5"><span className="font-semibold">{t("Şube", "Section")} {section.section}</span>{section.instructor ? <span className="ml-2 text-xs text-muted-foreground">{section.instructor}</span> : null}<span className="mt-1 block text-xs text-muted-foreground">{section.meetings.length ? section.meetings.map((meeting) => `${dayLabel(meeting.day)} ${String(meeting.start).padStart(2,"0")}:40${meeting.room ? ` · ${meeting.room}` : ""}`).join(" / ") : t("Gün ve saat henüz yayımlanmadı", "Day and time not published yet")}</span></button>)}</div> : null}

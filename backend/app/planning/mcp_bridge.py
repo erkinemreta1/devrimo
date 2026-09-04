@@ -5,7 +5,6 @@ the connected SAIS functions directly, normalizes their structured results,
 and persists only the typed private snapshot used by deterministic code.
 """
 
-import json
 from collections.abc import AsyncIterator, Iterable
 from contextlib import asynccontextmanager
 from typing import Any
@@ -16,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.toolset import build_toolkits, close_toolkits, connect_toolkits
 from app.campus import service as campus_service
+from app.campus.mcp_results import mcp_payload
 from app.config import get_settings
 from app.db.session import SessionLocal
 from app.logging import get_logger
@@ -36,17 +36,10 @@ def _function(toolkits: Iterable[MCPTools], name: str):
 async def _payload(function) -> Any:
     if function is None or function.entrypoint is None:
         return None
-    result = await function.entrypoint()
-    metadata = getattr(result, "metadata", None) or {}
-    if metadata.get("structured_content") is not None:
-        return metadata["structured_content"]
-    content = getattr(result, "content", result)
-    if isinstance(content, str):
-        try:
-            return json.loads(content)
-        except json.JSONDecodeError:
-            return None
-    return content
+    payload = mcp_payload(await function.entrypoint())
+    # A payload still in string form means the server answered with prose
+    # rather than a document, which this bridge has no way to normalize.
+    return None if isinstance(payload, str) else payload
 
 
 def _find_value(value: Any, keys: set[str]) -> Any:
@@ -115,6 +108,14 @@ def _number(value: Any, default: float = 0) -> float:
 
 
 async def refresh_from_sais(user_id: UUID, term: str, connected: list[MCPTools]) -> bool:
+    """Store this student's transcript snapshot; ``False`` when SAIS gave nothing.
+
+    An *empty* transcript is an answer, not a failure. A first-semester student
+    has no completed courses and no credits, and treating that as a failed
+    fetch left them with no snapshot, no stored context, and a "could not be
+    fetched from SAIS" error on every refresh they tried. Only SAIS being
+    unreachable or unreadable — no transcript tool, no payload — returns False.
+    """
     transcript_fn = _function(connected, "sais_get_transcript")
     if transcript_fn is None:
         return False
@@ -129,8 +130,6 @@ async def refresh_from_sais(user_id: UUID, term: str, connected: list[MCPTools])
         _find_value(transcript, {"total_credits", "completed_credits", "credits_completed", "toplam_kredi"})
     )
     cgpa = _number(_find_value(transcript, {"cgpa", "cumulative_gpa", "gpa", "genel_not_ortalamasi"}))
-    if not completed and credits <= 0:
-        return False
     async with SessionLocal() as db:
         await upsert_academic_snapshot(
             db,
