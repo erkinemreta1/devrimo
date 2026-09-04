@@ -112,7 +112,7 @@ export function SettingsClient() {
 
           <Card id="personalization" className="motion-enter surface-raised scroll-mt-24 border-0 ring-1 ring-foreground/8 [animation-delay:40ms]">
             <CardHeader className="border-b bg-muted/20"><div className="flex items-start gap-3"><span className="grid size-9 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary"><SparklesIcon className="size-4" /></span><div><CardTitle>{pick({ tr: "Kişiselleştirme ve güncellemeler", en: "Personalization and updates" })}</CardTitle><CardDescription className="mt-1">{pick({ tr: "İlgi alanlarını düzenle ve e-postadan yalnızca yapılandırılmış tarih/etkinlik bilgisi çıkarılmasına izin ver.", en: "Edit your interests and choose whether email may yield structured date and event facts." })}</CardDescription></div></div></CardHeader>
-            <CardContent className="space-y-5"><AcademicContextEditor /><PreferenceEditor /><div className="grid grid-cols-[1fr_auto] items-start gap-4 rounded-xl border bg-background/55 p-4"><div><Label htmlFor="mail-facts" className="font-semibold">{pick({ tr: "E-postadan yapılandırılmış güncellemeler", en: "Structured updates from email" })}</Label><p className="mt-1 text-sm leading-5 text-muted-foreground">{pick({ tr: "Yalnızca etkinlik veya son tarih başlığı, özeti ve zamanı saklanır. Ham e-posta gövdesi kaydedilmez ve vektör dizinine gönderilmez.", en: "Only an event or deadline title, summary, and time are kept. Raw email bodies are not stored or embedded." })}</p></div><Switch id="mail-facts" checked={profile?.mail_facts_enabled ?? false} disabled={!profile || updateProfile.isPending} onCheckedChange={(checked) => void updateProfile.mutateAsync({ mail_facts_enabled: checked }).catch((error) => toast.error(error instanceof Error ? error.message : "Update failed"))} /></div></CardContent>
+            <CardContent className="space-y-5"><AcademicContextEditor /><AcademicDataManager /><PreferenceEditor /><div className="grid grid-cols-[1fr_auto] items-start gap-4 rounded-xl border bg-background/55 p-4"><div><Label htmlFor="mail-facts" className="font-semibold">{pick({ tr: "E-postadan yapılandırılmış güncellemeler", en: "Structured updates from email" })}</Label><p className="mt-1 text-sm leading-5 text-muted-foreground">{pick({ tr: "Yalnızca etkinlik veya son tarih başlığı, özeti ve zamanı saklanır. Ham e-posta gövdesi kaydedilmez ve vektör dizinine gönderilmez.", en: "Only an event or deadline title, summary, and time are kept. Raw email bodies are not stored or embedded." })}</p></div><Switch id="mail-facts" checked={profile?.mail_facts_enabled ?? false} disabled={!profile || updateProfile.isPending} onCheckedChange={(checked) => void updateProfile.mutateAsync({ mail_facts_enabled: checked }).catch((error) => toast.error(error instanceof Error ? error.message : "Update failed"))} /></div></CardContent>
           </Card>
 
           <Card id="memory" className="motion-enter surface-raised scroll-mt-24 border-0 ring-1 ring-foreground/8 [animation-delay:70ms]">
@@ -176,6 +176,48 @@ function AcademicContextEditor() {
   const mutation = useMutation({ mutationFn: (body: Record<string, unknown>) => jsonFetch<AcademicContext>("/api/student/context", { method: "PUT", body }), onSuccess: (data) => { client.setQueryData(["student", "context"], data); toast.success(pick({ tr: "Akademik bağlam kaydedildi", en: "Academic context saved" })); }, onError: (error) => toast.error(error.message) });
   const context = query.data;
   return <div className="rounded-xl border bg-background/55 p-4"><div className="mb-3 flex flex-wrap items-center justify-between gap-2"><div><p className="font-semibold">{pick({ tr: "Akademik bağlam", en: "Academic context" })}</p><p className="text-xs text-muted-foreground">{context?.verified_at ? pick({ tr: "SAIS'ten doğrulandı; kullanmadan önce onayını bekliyor.", en: "Verified from SAIS; your confirmation is required before use." }) : pick({ tr: "SAIS doğrulaması yoksa elle düzenleyebilirsin.", en: "You can edit this manually when SAIS verification is unavailable." })}</p></div>{context ? <Badge variant={context.verified_at ? "secondary" : "outline"}>{context.source}</Badge> : null}</div>{context?.needs_confirmation ? <div className="flex items-center justify-between gap-3 rounded-lg border border-primary/20 bg-primary/5 p-3"><p className="text-sm">{[context.department, context.degree_level, context.program_code, context.campus].filter(Boolean).join(" · ")}</p><Button size="sm" onClick={() => mutation.mutate({ confirm_verified: true })}>{pick({ tr: "Doğrula", en: "Confirm" })}</Button></div> : <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><Input value={department ?? context?.department ?? ""} onChange={(event) => setDepartment(event.target.value)} placeholder={pick({ tr: "Bölüm", en: "Department" })} /><Select value={degree ?? context?.degree_level ?? "undergraduate"} onValueChange={(value) => setDegree(value ?? undefined)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{["undergraduate", "masters", "doctoral", "exchange", "other"].map((value) => <SelectItem key={value} value={value}>{value}</SelectItem>)}</SelectContent></Select><Input value={program ?? context?.program_code ?? ""} onChange={(event) => setProgram(event.target.value)} placeholder={pick({ tr: "Program kodu", en: "Program code" })} /><div className="flex gap-2"><Input value={campus ?? context?.campus ?? "Ankara"} onChange={(event) => setCampus(event.target.value)} placeholder={pick({ tr: "Kampüs", en: "Campus" })} /><Button variant="outline" disabled={mutation.isPending} onClick={() => mutation.mutate({ department: department ?? context?.department, degree_level: degree ?? context?.degree_level ?? "undergraduate", program_code: program ?? context?.program_code, campus: campus ?? context?.campus ?? "Ankara" })}>{pick({ tr: "Kaydet", en: "Save" })}</Button></div></div>}</div>;
+}
+
+type AcademicData = {
+  context: AcademicContext | null;
+  snapshots: Array<{ term: string; completed_course_count: number; completed_course_codes: string[]; enrolled_course_count: number; fetched_at: string; source: string }>;
+  has_cached_data: boolean;
+};
+
+function AcademicDataManager() {
+  const { pick } = useLocale();
+  const client = useQueryClient();
+  const [term, setTerm] = useState("20261");
+  const query = useQuery({ queryKey: ["student", "academic-data"], queryFn: () => jsonFetch<AcademicData>("/api/student/academic-data") });
+  const sync = useMutation({
+    mutationFn: () => jsonFetch<AcademicData>("/api/student/academic-data/sync", { method: "POST", body: { term, force: true } }),
+    onSuccess: (data) => {
+      client.setQueryData(["student", "academic-data"], data);
+      void client.invalidateQueries({ queryKey: ["student", "context"] });
+      toast.success(pick({ tr: "Akademik veriler SAIS'ten yenilendi.", en: "Academic data refreshed from SAIS." }));
+    },
+    onError: (error) => toast.error(error.message),
+  });
+  const reset = useMutation({
+    mutationFn: () => jsonFetch<{ deleted: boolean }>("/api/student/academic-data", { method: "DELETE" }),
+    onSuccess: () => {
+      client.setQueryData(["student", "academic-data"], { context: null, snapshots: [], has_cached_data: false });
+      void client.invalidateQueries({ queryKey: ["student", "context"] });
+      toast.success(pick({ tr: "Bölüm ve transkript verileri silindi.", en: "Department and transcript data deleted." }));
+    },
+    onError: (error) => toast.error(error.message),
+  });
+  const latest = query.data?.snapshots[0];
+  return <div className="rounded-xl border bg-background/55 p-4">
+    <div className="flex flex-wrap items-start justify-between gap-3">
+      <div><p className="font-semibold">{pick({ tr: "Kayıtlı akademik veriler", en: "Stored academic data" })}</p><p className="mt-1 max-w-2xl text-xs leading-5 text-muted-foreground">{pick({ tr: "Bölümün ve transkriptindeki ders kodları ilk kullanımda bir kez alınır. Notlar burada gösterilmez veya yapay zekâ belleğine eklenmez.", en: "Your department and transcript course codes are fetched once on first use. Grades are not shown here or added to AI memory." })}</p></div>
+      {query.isLoading ? <Loader2Icon className="size-4 animate-spin text-muted-foreground" /> : <Badge variant={query.data?.has_cached_data ? "secondary" : "outline"}>{query.data?.has_cached_data ? pick({ tr: "Kayıtlı", en: "Stored" }) : pick({ tr: "Henüz alınmadı", en: "Not fetched" })}</Badge>}
+    </div>
+    {latest ? <div className="mt-3 rounded-lg border bg-muted/20 p-3 text-sm"><p className="font-medium">{latest.completed_course_count} {pick({ tr: "tamamlanmış ders", en: "completed courses" })} · {latest.enrolled_course_count} {pick({ tr: "kayıtlı ders", en: "enrolled courses" })}</p><p className="mt-1 text-xs text-muted-foreground">{pick({ tr: "Dönem", en: "Term" })}: {latest.term} · {new Date(latest.fetched_at).toLocaleString()}</p>{latest.completed_course_codes.length ? <p className="mt-2 line-clamp-2 text-xs text-muted-foreground">{latest.completed_course_codes.join(" · ")}</p> : null}</div> : null}
+    <div className="mt-4 flex flex-wrap items-end gap-2"><div className="space-y-1"><Label htmlFor="academic-term" className="text-xs">{pick({ tr: "Dönem", en: "Term" })}</Label><Input id="academic-term" className="w-28" value={term} onChange={(event) => setTerm(event.target.value)} /></div><Button variant="outline" disabled={sync.isPending || term.trim().length < 3} onClick={() => sync.mutate()}>{sync.isPending ? <Loader2Icon className="animate-spin" /> : <RotateCcwIcon />}{pick({ tr: "SAIS'ten yenile", en: "Refresh from SAIS" })}</Button>
+      {query.data?.has_cached_data ? <AlertDialog><AlertDialogTrigger render={<Button variant="outline" className="text-destructive" />}><Trash2Icon />{pick({ tr: "Akademik verileri sıfırla", en: "Reset academic data" })}</AlertDialogTrigger><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>{pick({ tr: "Akademik veriler silinsin mi?", en: "Delete academic data?" })}</AlertDialogTitle><AlertDialogDescription>{pick({ tr: "Kayıtlı bölüm ve transkript dersleri kalıcı olarak silinir. ODTÜ bağlantın ve giriş bilgilerin silinmez; gerektiğinde veriler tekrar alınabilir.", en: "Stored department and transcript courses are permanently deleted. Your METU connection and credentials remain; the data can be fetched again when needed." })}</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>{pick({ tr: "Vazgeç", en: "Cancel" })}</AlertDialogCancel><AlertDialogAction variant="destructive" disabled={reset.isPending} onClick={() => reset.mutate()}>{reset.isPending ? <Loader2Icon className="animate-spin" /> : <Trash2Icon />}{pick({ tr: "Sil ve sıfırla", en: "Delete and reset" })}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog> : null}
+    </div>
+  </div>;
 }
 
 function PreferenceEditor() {

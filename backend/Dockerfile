@@ -85,6 +85,11 @@ RUN set -eux; \
         uv venv --python 3.11 "/opt/mcp/${slug}/.venv"; \
     done
 
+# Upstream currently skips a meeting table when it is nested in the same row
+# as the section button. Keep the pinned source reproducible while applying
+# the narrow parser correction before building its wheel.
+COPY vendor_patches/course_info/sais_client.py /opt/mcp/course-info/src/metu_course_info_mcp/sais_client.py
+
 # Installed as a built wheel, not `-e`, so nothing at runtime depends on the
 # source tree layout surviving. metu-odtuclass-mcp ships loose modules and a
 # requirements.txt rather than an installable package, so it gets its

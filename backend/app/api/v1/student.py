@@ -4,7 +4,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user
@@ -13,7 +13,7 @@ from app.db.models import StudentAcademicSnapshot, StudentContext, UserPreferenc
 from app.db.session import get_db
 from app.logging import get_logger
 from app.planning.groups import get_course_group
-from app.planning.mcp_bridge import sync_planning_snapshot_from_sais
+from app.planning.mcp_bridge import sync_planning_snapshot_from_sais, sync_student_context_from_sais
 from app.planning.service import SemesterPlanRequest, plan_semester
 from app.student import service
 from app.student.updates import get_updates
@@ -40,6 +40,11 @@ class GroupRequestIn(BaseModel):
     section: str | None = Field(default=None, max_length=16)
 
 
+class AcademicSyncIn(BaseModel):
+    term: str = Field(min_length=3, max_length=32)
+    force: bool = False
+
+
 def _context_out(context: StudentContext) -> dict:
     return {
         "department": context.department,
@@ -51,6 +56,96 @@ def _context_out(context: StudentContext) -> dict:
         "confirmed_at": context.confirmed_at,
         "needs_confirmation": context.verified_at is not None and context.confirmed_at is None,
     }
+
+
+def _course_code(item: Any) -> str | None:
+    if isinstance(item, str):
+        return item.strip() or None
+    if not isinstance(item, dict):
+        return None
+    for key in ("course_code", "courseCode", "code", "course", "ders_kodu"):
+        value = item.get(key)
+        if isinstance(value, (str, int)) and str(value).strip():
+            return str(value).strip()
+    return None
+
+
+async def _academic_data_out(db: AsyncSession, user_id: UUID) -> dict:
+    context = await db.get(StudentContext, user_id)
+    snapshots = list(
+        (
+            await db.scalars(
+                select(StudentAcademicSnapshot)
+                .where(StudentAcademicSnapshot.user_id == user_id)
+                .order_by(StudentAcademicSnapshot.fetched_at.desc())
+            )
+        ).all()
+    )
+    return {
+        "context": _context_out(context) if context else None,
+        "snapshots": [
+            {
+                "term": snapshot.term,
+                "completed_course_count": len(snapshot.completed_courses),
+                "completed_course_codes": [
+                    code for item in snapshot.completed_courses if (code := _course_code(item))
+                ],
+                "enrolled_course_count": len(snapshot.enrolled_courses),
+                "fetched_at": snapshot.fetched_at,
+                "source": snapshot.source,
+            }
+            for snapshot in snapshots
+        ],
+        "has_cached_data": bool(
+            snapshots or (context and (context.department or context.program_code or context.degree_level))
+        ),
+    }
+
+
+@router.get("/academic-data")
+async def academic_data_get(
+    user: AuthenticatedUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)
+) -> dict:
+    return await _academic_data_out(db, user.id)
+
+
+@router.post("/academic-data/sync")
+async def academic_data_sync(
+    body: AcademicSyncIn,
+    user: AuthenticatedUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    context = await db.get(StudentContext, user.id)
+    latest_snapshot = await db.scalar(
+        select(StudentAcademicSnapshot)
+        .where(StudentAcademicSnapshot.user_id == user.id)
+        .order_by(StudentAcademicSnapshot.fetched_at.desc())
+        .limit(1)
+    )
+    try:
+        # A transcript describes accumulated course history. Reuse the newest
+        # snapshot across planning terms until the user explicitly refreshes it.
+        if body.force or latest_snapshot is None:
+            if not await sync_planning_snapshot_from_sais(user.id, body.term):
+                raise RuntimeError("SAIS did not return an academic snapshot")
+        elif context is None or not (context.department or context.program_code):
+            if not await sync_student_context_from_sais(user.id):
+                raise RuntimeError("SAIS did not return student context")
+    except Exception as exc:
+        logger.warning("academic_data_sync_failed", user_id=str(user.id), error=str(exc))
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Academic data could not be fetched from SAIS") from exc
+    await db.rollback()
+    return await _academic_data_out(db, user.id)
+
+
+@router.delete("/academic-data")
+async def academic_data_delete(
+    user: AuthenticatedUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)
+) -> dict:
+    await db.execute(delete(StudentAcademicSnapshot).where(StudentAcademicSnapshot.user_id == user.id))
+    await db.execute(delete(StudentContext).where(StudentContext.user_id == user.id))
+    await db.commit()
+    return {"deleted": True}
 
 
 @router.get("/context")

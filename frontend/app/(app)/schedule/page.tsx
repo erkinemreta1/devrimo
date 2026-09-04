@@ -1,5 +1,5 @@
-import { DeterministicSchedulePlanner } from "@/components/schedule/deterministic-schedule-planner";
+import { SchedulePlanner } from "@/components/schedule/schedule-planner";
 
 export default function SchedulePage() {
-  return <DeterministicSchedulePlanner />;
+  return <SchedulePlanner />;
 }

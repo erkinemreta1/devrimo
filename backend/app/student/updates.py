@@ -88,7 +88,10 @@ async def get_updates(db: AsyncSession, user_id: UUID, *, digest: bool = False, 
                     "read": False,
                 }
             )
-    items.sort(key=lambda item: item.get("starts_at") or item.get("published_at") or item["retrieved_at"], reverse=True)
+    items.sort(
+        key=lambda item: item.get("starts_at") or item.get("published_at") or item.get("retrieved_at") or "",
+        reverse=True,
+    )
     size = min(limit, 5) if digest else limit
     return {
         "mode": "digest" if digest else "feed",

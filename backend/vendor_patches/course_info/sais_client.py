@@ -1,0 +1,698 @@
+"""METU SAIS (Student Affairs Information System) HTTP Client and HTML Parsers."""
+
+from typing import List, Dict, Optional, Tuple, Any
+import asyncio
+import re
+import httpx
+from bs4 import BeautifulSoup
+
+from .config import settings
+from .models import (
+    Department,
+    Semester,
+    DepartmentAndSemesterList,
+    CourseSummary,
+    CourseSection,
+    CourseDetails,
+    ScheduleEntry,
+    CoursePrerequisite,
+    CourseReplacement,
+    ThesisCourse,
+    StudentProgramType,
+    StudentCourseCategory,
+    StudentCategoryOverview,
+    StudentCategoryCourse,
+    StudentCategoryResult,
+)
+
+
+def clean_text(text: Optional[str]) -> str:
+    """Cleans up text, normalizes whitespace and repairs windows-1252 / latin-1 mojibake if present."""
+    if not text:
+        return ""
+    text = text.strip()
+    # Only attempt mojibake repair if common UTF-8 double-encoding artifacts are present
+    if any(c in text for c in ["Ã", "Ä", "Å", "â", "\x9d", "\x92"]):
+        for enc in ["windows-1252", "latin-1", "iso-8859-9"]:
+            try:
+                fixed = text.encode(enc).decode("utf-8")
+                text = fixed
+                break
+            except (UnicodeEncodeError, UnicodeDecodeError):
+                pass
+    return re.sub(r"\s+", " ", text).strip()
+
+
+class SAISAuthError(Exception):
+    """Raised when authentication against METU SAIS fails."""
+    pass
+
+
+class SAISClient:
+    """Client for interacting with METU SAIS Student Portal services."""
+
+    BASE_URL = "https://student.metu.edu.tr"
+    SIGNIN_URL = f"{BASE_URL}/sso/backend/request/user/signin"
+    GET_CONTENT_URL = f"{BASE_URL}/portal/backend/request/route/get_content"
+
+    def __init__(
+        self,
+        username: Optional[str] = None,
+        password: Optional[str] = None,
+        locale: Optional[str] = None,
+    ):
+        self.username = username or settings.sais_username
+        self.password = password or settings.sais_password
+        self.locale = locale or settings.locale or "tr"
+        self._token: Optional[str] = None
+        self._client = httpx.AsyncClient(
+            timeout=30.0,
+            follow_redirects=True,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/124.0.0.0 Safari/537.36"
+                ),
+                "Accept-Language": "en-US,en;q=0.9,tr;q=0.8",
+            },
+        )
+
+    async def aclose(self):
+        """Close the underlying HTTP client."""
+        await self._client.aclose()
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self.aclose()
+
+    async def authenticate(self, force: bool = False) -> str:
+        """Authenticate with SAIS SSO and obtain JWT token."""
+        if self._token and not force:
+            return self._token
+
+        if not self.username or not self.password:
+            raise SAISAuthError(
+                "SAIS credentials are required. Set SAIS_USERNAME and SAIS_PASSWORD in .env or pass them explicitly."
+            )
+
+        signin_headers = {
+            "Content-Type": "application/json;charset=UTF-8",
+            "X-Requested-With": "XMLHttpRequest",
+        }
+        signin_payload = {
+            "username": self.username,
+            "password": self.password,
+        }
+
+        resp = await self._client.post(
+            self.SIGNIN_URL,
+            json=signin_payload,
+            headers=signin_headers,
+        )
+
+        if resp.status_code != 200:
+            raise SAISAuthError(f"Signin HTTP status {resp.status_code}: {resp.text}")
+
+        token = resp.headers.get("token") or resp.headers.get("Token")
+        if not token:
+            try:
+                body = resp.json()
+                if "error" in body and body["error"]:
+                    raise SAISAuthError(f"Signin error from SAIS: {body['error']}")
+            except Exception:
+                pass
+            raise SAISAuthError("Failed to obtain authentication token from SAIS response headers.")
+
+        self._token = token
+        return token
+
+    async def _get_app_proxy_session(self, app_code: int) -> Tuple[str, str, BeautifulSoup]:
+        """Navigate through SAIS portal get_content, autologin form, and return initial proxy HTML."""
+        token = await self.authenticate()
+
+        # Step 1: get_content route
+        content_headers = {
+            "Content-Type": "application/json;charset=UTF-8",
+            "X-Requested-With": "XMLHttpRequest",
+            "Token": token,
+            "Locale": self.locale,
+        }
+        content_payload = {"app": app_code, "additionalInfo": False}
+
+        resp = await self._client.post(
+            self.GET_CONTENT_URL,
+            json=content_payload,
+            headers=content_headers,
+        )
+
+        if resp.status_code != 200:
+            # Try re-authenticating once if unauthorized
+            token = await self.authenticate(force=True)
+            content_headers["Token"] = token
+            resp = await self._client.post(
+                self.GET_CONTENT_URL,
+                json=content_payload,
+                headers=content_headers,
+            )
+            if resp.status_code != 200:
+                raise SAISAuthError(f"get_content for app {app_code} failed with status {resp.status_code}")
+
+        res_json = resp.json()
+        pkg = res_json.get("pkg")
+        if not pkg:
+            raise ValueError(f"No pkg token returned for app {app_code}")
+
+        # Step 2: GET content.php?pkg=...
+        page_url = f"{self.BASE_URL}/portal/content.php?pkg={pkg}"
+        page_resp = await self._client.get(
+            page_url,
+            headers={"Referer": f"{self.BASE_URL}/portal/"},
+        )
+
+        autologin_html = self._decode_html(page_resp)
+        soup = BeautifulSoup(autologin_html, "html.parser")
+        form = soup.find("form", id="autologin") or soup.find("form")
+        if not form:
+            raise ValueError(f"Autologin form not found in content.php for app {app_code}")
+
+        action = form.get("action", "")
+        if not action.startswith("http"):
+            action = f"{self.BASE_URL}/{action.lstrip('/')}"
+
+        form_data = {}
+        for inp in form.find_all("input"):
+            name = inp.get("name")
+            val = inp.get("value", "")
+            if name:
+                form_data[name] = val
+
+        # Step 3: POST autologin form to proxy gateway
+        proxy_resp = await self._client.post(
+            action,
+            data=form_data,
+            headers={"Referer": page_url},
+        )
+
+        proxy_html = self._decode_html(proxy_resp)
+        proxy_soup = BeautifulSoup(proxy_html, "html.parser")
+        return str(proxy_resp.url), proxy_html, proxy_soup
+
+    def _decode_html(self, response: httpx.Response) -> str:
+        """Safely decodes HTML responses handling iso-8859-9 / windows-1254 and utf-8."""
+        content = response.content
+        for encoding in ["utf-8", "windows-1254", "iso-8859-9", "latin-1"]:
+            try:
+                return content.decode(encoding)
+            except (UnicodeDecodeError, LookupError):
+                continue
+        return content.decode("utf-8", errors="replace")
+
+    # =========================================================================
+    # Service 64: View Program Course Details
+    # =========================================================================
+
+    async def get_departments_and_semesters(self) -> DepartmentAndSemesterList:
+        """Fetch all available METU departments and semesters from Program Course Details (64)."""
+        _, _, soup = await self._get_app_proxy_session(64)
+
+        departments: List[Department] = []
+        dept_select = soup.find("select", {"name": re.compile(r"select_dept", re.I)})
+        if dept_select:
+            for opt in dept_select.find_all("option"):
+                code = opt.get("value", "").strip()
+                name = clean_text(opt.get_text(strip=True))
+                if code and code != "0":
+                    departments.append(Department(code=code, name=name))
+
+        semesters: List[Semester] = []
+        sem_select = soup.find("select", {"name": re.compile(r"select_semester", re.I)})
+        if sem_select:
+            for opt in sem_select.find_all("option"):
+                code = opt.get("value", "").strip()
+                name = clean_text(opt.get_text(strip=True))
+                if code:
+                    semesters.append(Semester(code=code, name=name))
+
+        return DepartmentAndSemesterList(departments=departments, semesters=semesters)
+
+    async def _submit_course_list_page(
+        self, department_code: str, semester_code: str
+    ) -> Tuple[str, str, BeautifulSoup]:
+        """Submit the department and semester selection in App 64 to get the course list page."""
+        target_url, _, soup = await self._get_app_proxy_session(64)
+
+        form = soup.find("form")
+        if not form:
+            raise ValueError("Course query form not found in App 64 initial page.")
+
+        action = form.get("action", "main.php")
+        if not action.startswith("http"):
+            base_dir = target_url.rsplit("/", 1)[0]
+            action = f"{base_dir}/{action.lstrip('/')}"
+
+        hidden_creds = ""
+        creds_elem = soup.find("input", {"name": "hidden_creds"})
+        if creds_elem:
+            hidden_creds = creds_elem.get("value", "")
+
+        hidden_redir = "Login"
+        redir_elem = soup.find("input", {"name": "hidden_redir"})
+        if redir_elem:
+            hidden_redir = redir_elem.get("value", "Login")
+
+        post_data = {
+            "select_dept": str(department_code).strip(),
+            "select_semester": str(semester_code).strip(),
+            "textWithoutThesis": "1",
+            "submit_CourseList": "Submit",
+            "hidden_redir": hidden_redir,
+            "hidden_creds": hidden_creds,
+        }
+
+        resp = await self._client.post(
+            action,
+            data=post_data,
+            headers={"Referer": target_url},
+        )
+        html = self._decode_html(resp)
+        res_soup = BeautifulSoup(html, "html.parser")
+        return action, html, res_soup
+
+    async def list_program_courses(
+        self, department_code: str, semester_code: str
+    ) -> List[CourseSummary]:
+        """List all courses offered for a specific department and semester."""
+        _, _, soup = await self._submit_course_list_page(department_code, semester_code)
+
+        courses: List[CourseSummary] = []
+        for table in soup.find_all("table"):
+            rows = table.find_all("tr")
+            if not rows:
+                continue
+            header_cells = [td.get_text(strip=True).lower() for td in rows[0].find_all(["td", "th"])]
+            if any("code" in h for h in header_cells) and any("name" in h for h in header_cells):
+                for tr in rows[1:]:
+                    cells = tr.find_all(["td", "th"])
+                    if len(cells) >= 6:
+                        radio = tr.find("input", {"type": "radio", "name": "text_course_code"})
+                        code_from_radio = radio.get("value", "").strip() if radio else ""
+
+                        cell_texts = [clean_text(c.get_text(" ", strip=True)) for c in cells]
+                        if radio and len(cell_texts) >= 7:
+                            code = code_from_radio or cell_texts[1]
+                            name = cell_texts[2]
+                            ects = cell_texts[3]
+                            credit = cell_texts[4]
+                            level = cell_texts[5]
+                            ctype = cell_texts[6] if len(cell_texts) > 6 else ""
+                        else:
+                            code = code_from_radio or cell_texts[0]
+                            name = cell_texts[1]
+                            ects = cell_texts[2] if len(cell_texts) > 2 else ""
+                            credit = cell_texts[3] if len(cell_texts) > 3 else ""
+                            level = cell_texts[4] if len(cell_texts) > 4 else ""
+                            ctype = cell_texts[5] if len(cell_texts) > 5 else ""
+
+                        if code:
+                            courses.append(
+                                CourseSummary(
+                                    course_code=code,
+                                    name=name,
+                                    ects_credit=ects,
+                                    credit=credit,
+                                    level=level,
+                                    type=ctype,
+                                )
+                            )
+
+        return courses
+
+    async def get_course_info(
+        self, department_code: str, semester_code: str, course_code: str
+    ) -> CourseDetails:
+        """Get section details, instructors, and critical course info for a course."""
+        action_url, _, soup = await self._submit_course_list_page(department_code, semester_code)
+
+        post_data = {
+            "text_course_code": str(course_code).strip(),
+            "SubmitCourseInfo": "Submit",
+            "hidden_redir": "Course_List",
+        }
+
+        resp = await self._client.post(
+            action_url,
+            data=post_data,
+            headers={"Referer": action_url},
+        )
+        html = self._decode_html(resp)
+        res_soup = BeautifulSoup(html, "html.parser")
+
+        dept_name = ""
+        sem_name = str(semester_code)
+        c_name = ""
+        credit_info = ""
+
+        header_table = res_soup.find("table")
+        if header_table:
+            text = header_table.get_text(" ", strip=True)
+            dept_m = re.search(r"Department\s*:\s*([^:\n\r]+?)(?=Semester|$)", text, re.I)
+            if dept_m:
+                dept_name = clean_text(dept_m.group(1))
+            name_m = re.search(r"Course Name\s*:\s*([^:\n\r]+?)(?=Credit|$)", text, re.I)
+            if name_m:
+                c_name = clean_text(name_m.group(1))
+            credit_m = re.search(r"Credit\s*:\s*([^\n\r]+)", text, re.I)
+            if credit_m:
+                credit_info = clean_text(credit_m.group(1))
+
+        sections: List[CourseSection] = []
+        for table in res_soup.find_all("table"):
+            rows = table.find_all("tr")
+            if not rows:
+                continue
+            headers = [th.get_text(strip=True).lower() for th in rows[0].find_all(["td", "th"])]
+            if any("section" in h for h in headers) and any("instructor" in h for h in headers):
+                current_section: Optional[CourseSection] = None
+                for tr in rows[1:]:
+                    cells = tr.find_all(["td", "th"])
+                    if not cells:
+                        continue
+                    sec_input = tr.find("input", {"name": "submit_section"})
+                    if sec_input:
+                        sec_num = clean_text(sec_input.get("value", ""))
+                        instructors = []
+                        if len(cells) > 1:
+                            inst1 = clean_text(cells[1].get_text(strip=True))
+                            if inst1:
+                                instructors.append(inst1)
+                        if len(cells) > 2:
+                            inst2 = clean_text(cells[2].get_text(strip=True))
+                            if inst2 and inst2 not in instructors:
+                                instructors.append(inst2)
+
+                        syllabus_avail = bool(tr.find("button", {"name": "submit_syllabus"}))
+                        crit_area = tr.find("textarea", {"name": "text_eklenti"})
+                        crit_info = clean_text(crit_area.get_text(strip=True)) if crit_area else ""
+
+                        current_section = CourseSection(
+                            section=sec_num,
+                            instructors=instructors,
+                            syllabus_available=syllabus_avail,
+                            critical_info=crit_info,
+                            schedule=[],
+                        )
+                        sections.append(current_section)
+                        # The live page nests a four-column meeting table in
+                        # the section row: day, start, end, room. Parse it
+                        # here so the later recursive rows cannot duplicate it.
+                        nested_table = tr.find("table")
+                        if nested_table:
+                            for sch_tr in nested_table.find_all("tr"):
+                                sch_cells = [clean_text(td.get_text(strip=True)) for td in sch_tr.find_all("td")]
+                                if any(sch_cells) and len(sch_cells) >= 3:
+                                    start = sch_cells[1] if len(sch_cells) > 1 else ""
+                                    end = sch_cells[2] if len(sch_cells) > 2 else ""
+                                    current_section.schedule.append(
+                                        ScheduleEntry(
+                                            day=sch_cells[0] if len(sch_cells) > 0 else "",
+                                            time=f"{start}-{end}" if len(sch_cells) >= 4 else start,
+                                            room=sch_cells[3] if len(sch_cells) >= 4 else end,
+                                        )
+                                    )
+
+        return CourseDetails(
+            department=dept_name or department_code,
+            semester=sem_name,
+            course_code=course_code,
+            course_name=c_name,
+            credit_info=credit_info,
+            sections=sections,
+        )
+
+    async def get_course_prerequisites(
+        self, department_code: str, semester_code: str, course_code: str
+    ) -> List[CoursePrerequisite]:
+        """Fetch prerequisite courses and rules for a course."""
+        action_url, _, _ = await self._submit_course_list_page(department_code, semester_code)
+
+        post_data = {
+            "text_course_code": str(course_code).strip(),
+            "SubmitPrerequisite": "Submit",
+            "hidden_redir": "Course_List",
+        }
+
+        resp = await self._client.post(
+            action_url,
+            data=post_data,
+            headers={"Referer": action_url},
+        )
+        html = self._decode_html(resp)
+        soup = BeautifulSoup(html, "html.parser")
+
+        prereqs: List[CoursePrerequisite] = []
+        for table in soup.find_all("table"):
+            rows = table.find_all("tr")
+            if not rows:
+                continue
+            headers = [th.get_text(strip=True).lower() for th in rows[0].find_all(["td", "th"])]
+            if any("course code" in h or "prerequisite" in h for h in headers) and any("set no" in h or "min grade" in h for h in headers):
+                for tr in rows[1:]:
+                    cells = [clean_text(td.get_text(" ", strip=True)) for td in tr.find_all(["td", "th"])]
+                    if len(cells) >= 7:
+                        prereqs.append(
+                            CoursePrerequisite(
+                                program_code=cells[0],
+                                dept_version=cells[1],
+                                prerequisite_course_code=cells[2],
+                                name=cells[3],
+                                credit=cells[4],
+                                set_no=cells[5],
+                                min_grade=cells[6] if len(cells) > 6 else "DD",
+                                level_type=cells[7] if len(cells) > 7 else "",
+                                position=cells[8] if len(cells) > 8 else "",
+                            )
+                        )
+
+        return prereqs
+
+    async def get_course_replacements(
+        self, department_code: str, semester_code: str, course_code: str
+    ) -> List[CourseReplacement]:
+        """Fetch equivalent / auto-replacement (Denk Dersler) courses for a course."""
+        action_url, _, _ = await self._submit_course_list_page(department_code, semester_code)
+
+        post_data = {
+            "text_course_code": str(course_code).strip(),
+            "SubmitReplacement": "Submit",
+            "hidden_redir": "Course_List",
+        }
+
+        resp = await self._client.post(
+            action_url,
+            data=post_data,
+            headers={"Referer": action_url},
+        )
+        html = self._decode_html(resp)
+        soup = BeautifulSoup(html, "html.parser")
+
+        replacements: List[CourseReplacement] = []
+        for table in soup.find_all("table"):
+            rows = table.find_all("tr")
+            if not rows:
+                continue
+            headers = [th.get_text(strip=True).lower() for th in rows[0].find_all(["td", "th"])]
+            if any("course code" in h or "replacement" in h for h in headers) and any("name" in h for h in headers):
+                for tr in rows[1:]:
+                    cells = [clean_text(td.get_text(" ", strip=True)) for td in tr.find_all(["td", "th"])]
+                    if len(cells) >= 6:
+                        replacements.append(
+                            CourseReplacement(
+                                program_code=cells[0],
+                                dept_version=cells[1],
+                                replaced_course_code=cells[2],
+                                name=cells[3],
+                                credit=cells[4],
+                                level=cells[5] if len(cells) > 5 else "",
+                                status=cells[6] if len(cells) > 6 else "",
+                            )
+                        )
+
+        return replacements
+
+    async def get_thesis_courses(
+        self, department_code: str, semester_code: str
+    ) -> List[ThesisCourse]:
+        """Fetch thesis work courses for a department."""
+        action_url, _, _ = await self._submit_course_list_page(department_code, semester_code)
+
+        post_data = {
+            "SubmitThesisWork": "Thesis Work Courses",
+            "hidden_redir": "Course_List",
+        }
+
+        resp = await self._client.post(
+            action_url,
+            data=post_data,
+            headers={"Referer": action_url},
+        )
+        html = self._decode_html(resp)
+        soup = BeautifulSoup(html, "html.parser")
+
+        courses: List[ThesisCourse] = []
+        for table in soup.find_all("table"):
+            rows = table.find_all("tr")
+            if not rows:
+                continue
+            headers = [th.get_text(strip=True).lower() for th in rows[0].find_all(["td", "th"])]
+            if any("code" in h for h in headers) and any("name" in h for h in headers):
+                for tr in rows[1:]:
+                    cells = [clean_text(td.get_text(" ", strip=True)) for td in tr.find_all(["td", "th"])]
+                    if len(cells) >= 6:
+                        courses.append(
+                            ThesisCourse(
+                                course_code=cells[0],
+                                name=cells[1],
+                                ects_credit=cells[2] if len(cells) > 2 else "",
+                                credit=cells[3] if len(cells) > 3 else "",
+                                level=cells[4] if len(cells) > 4 else "",
+                                type=cells[5] if len(cells) > 5 else "",
+                            )
+                        )
+
+        return courses
+
+    # =========================================================================
+    # Service 178: View Student Course Categories
+    # =========================================================================
+
+    async def get_student_categories_overview(self) -> StudentCategoryOverview:
+        """Fetch the logged-in student's program types and course category options."""
+        _, _, soup = await self._get_app_proxy_session(178)
+
+        program_types: List[StudentProgramType] = []
+        prog_select = soup.find("select", {"name": "text_program_type"})
+        if prog_select:
+            for opt in prog_select.find_all("option"):
+                val = opt.get("value", "").strip()
+                text = clean_text(opt.get_text(strip=True))
+                if val and val != "0":
+                    program_types.append(StudentProgramType(id=val, name=text))
+
+        categories: List[StudentCourseCategory] = []
+        cat_select = soup.find("select", {"name": "text_program_category"})
+        if cat_select:
+            for opt in cat_select.find_all("option"):
+                val = opt.get("value", "").strip()
+                text = clean_text(opt.get_text(strip=True))
+                if val and val != "0":
+                    categories.append(StudentCourseCategory(id=val, name=text))
+
+        return StudentCategoryOverview(
+            program_types=program_types,
+            course_categories=categories,
+        )
+
+    async def get_student_category_courses(
+        self,
+        program_type: str = "1",
+        category_id: str = "1-236",
+    ) -> StudentCategoryResult:
+        """Fetch courses belonging to a student's chosen category (e.g. MUST COURSE, DEPARTMENTAL ELECTIVE)."""
+        target_url, _, soup = await self._get_app_proxy_session(178)
+
+        form = soup.find("form")
+        if not form:
+            raise ValueError("Form not found in App 178 initial page.")
+
+        action = form.get("action", "main.php")
+        if not action.startswith("http"):
+            base_dir = target_url.rsplit("/", 1)[0]
+            action = f"{base_dir}/{action.lstrip('/')}"
+
+        cat_name = category_id
+        cat_select = soup.find("select", {"name": "text_program_category"})
+        if cat_select:
+            matched_opt = cat_select.find("option", {"value": category_id})
+            if matched_opt:
+                cat_name = clean_text(matched_opt.get_text(strip=True))
+
+        post_data = {
+            "text_program_type": str(program_type).strip(),
+            "text_program_category": str(category_id).strip(),
+            "submitDevam": "",
+            "hidden_redir": "StudentElectiveCourses",
+        }
+
+        resp = await self._client.post(
+            action,
+            data=post_data,
+            headers={"Referer": target_url},
+        )
+        html = self._decode_html(resp)
+        res_soup = BeautifulSoup(html, "html.parser")
+
+        alert_elem = res_soup.find("div", class_=re.compile(r"alert", re.I))
+        msg = None
+        if alert_elem:
+            msg = clean_text(alert_elem.get_text(" ", strip=True))
+
+        courses: List[StudentCategoryCourse] = []
+        table = res_soup.find("table")
+        if table:
+            rows = table.find_all("tr")
+            if len(rows) > 1:
+                for tr in rows[1:]:
+                    cells = [clean_text(td.get_text(" ", strip=True)) for td in tr.find_all(["td", "th"])]
+                    if len(cells) >= 6:
+                        courses.append(
+                            StudentCategoryCourse(
+                                course_code=cells[0],
+                                course_name=cells[1],
+                                category=cells[2],
+                                program_type=cells[3],
+                                credit=cells[4],
+                                year_or_ects=cells[5] if len(cells) > 5 else "",
+                            )
+                        )
+
+        return StudentCategoryResult(
+            category_id=category_id,
+            category_name=cat_name,
+            message=msg,
+            courses=courses,
+        )
+
+
+_client_cache: Dict[str, Tuple[Optional[asyncio.AbstractEventLoop], SAISClient]] = {}
+
+
+def get_cached_client(
+    username: Optional[str] = None,
+    password: Optional[str] = None,
+    locale: Optional[str] = None,
+) -> SAISClient:
+    """Retrieve or create a cached SAISClient instance bound to the current running event loop."""
+    try:
+        current_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        current_loop = None
+
+    u = username or settings.sais_username
+    p = password or settings.sais_password
+    loc = locale or settings.locale or "tr"
+    key = f"{u}:{loc}"
+
+    cached = _client_cache.get(key)
+    if (
+        cached is None
+        or cached[0] != current_loop
+        or cached[1]._client.is_closed
+    ):
+        client = SAISClient(username=u, password=p, locale=loc)
+        if current_loop is not None:
+            _client_cache[key] = (current_loop, client)
+        return client
+    return cached[1]
