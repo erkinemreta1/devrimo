@@ -7,8 +7,11 @@ agent, and it holds the same turn lock a chat turn does.
 """
 
 import asyncio
+import hashlib
 import json
 import re
+import time
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
@@ -27,8 +30,8 @@ from app.campus.course_info import (
     resolve_department,
 )
 from app.core.ttl_cache import TTLCache
-from app.db.models import StudentAcademicSnapshot, StudentContext
-from app.db.session import get_db
+from app.db.models import ScheduleDataCache, StudentAcademicSnapshot, StudentContext
+from app.db.session import SessionLocal, get_db
 from app.logging import get_logger
 from app.planning.mcp_bridge import sync_student_context_from_sais
 
@@ -42,6 +45,7 @@ logger = get_logger(__name__)
 _context_syncs = TTLCache(ttl_seconds=5 * 60, max_entries=1024)
 
 _AGENT_RUN_TIMEOUT_SECONDS = 180
+_PLAN_CACHE_SECONDS = 6 * 60 * 60
 
 
 class AiScheduleCourse(BaseModel):
@@ -49,9 +53,67 @@ class AiScheduleCourse(BaseModel):
 
 
 class AiScheduleRequest(BaseModel):
-    department: str = Field(min_length=3, max_length=20)
+    # Official SAIS abbreviations such as EE are two characters long.
+    department: str = Field(min_length=2, max_length=20)
     semester: str = Field(min_length=4, max_length=20)
     courses: list[AiScheduleCourse] = Field(default_factory=list, max_length=20)
+
+
+def _digest(value: Any) -> str:
+    encoded = json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _plan_cache_key(user_id, body: AiScheduleRequest, snapshot: StudentAcademicSnapshot | None) -> tuple[str, str]:
+    owner_hash = _digest(str(user_id))
+    identity = {
+        "owner": owner_hash,
+        "department": body.department.strip(),
+        "semester": body.semester.strip(),
+        "courses": [item.code.strip().upper() for item in body.courses],
+        "snapshot": snapshot.fetched_at.isoformat() if snapshot else None,
+    }
+    return _digest(identity), owner_hash
+
+
+async def _cached_plan(key_hash: str) -> dict[str, Any] | None:
+    try:
+        async with SessionLocal() as cache_db:
+            row = await cache_db.get(ScheduleDataCache, key_hash)
+            if row is None:
+                return None
+            expires_at = row.expires_at
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=UTC)
+            if expires_at <= datetime.now(UTC):
+                await cache_db.delete(row)
+                await cache_db.commit()
+                return None
+            return row.payload
+    except Exception as exc:
+        logger.warning("schedule_cache_read_failed", error=str(exc))
+        return None
+
+
+async def _store_plan(key_hash: str, owner_hash: str, payload: dict[str, Any]) -> None:
+    try:
+        async with SessionLocal() as cache_db:
+            row = await cache_db.get(ScheduleDataCache, key_hash)
+            if row is None:
+                row = ScheduleDataCache(
+                    key_hash=key_hash,
+                    owner_hash=owner_hash,
+                    namespace="schedule-plan",
+                    payload=payload,
+                    expires_at=datetime.now(UTC) + timedelta(seconds=_PLAN_CACHE_SECONDS),
+                )
+                cache_db.add(row)
+            else:
+                row.payload = payload
+                row.expires_at = datetime.now(UTC) + timedelta(seconds=_PLAN_CACHE_SECONDS)
+            await cache_db.commit()
+    except Exception as exc:
+        logger.warning("schedule_cache_write_failed", error=str(exc))
 
 
 async def _student_department(
@@ -241,12 +303,21 @@ async def ai_schedule_plan(
     db: AsyncSession = Depends(get_db),
 ):
     """Use one bounded agent run to fill gaps left by direct catalog calls."""
+    started_at = time.monotonic()
     snapshot = await db.scalar(
         select(StudentAcademicSnapshot)
         .where(StudentAcademicSnapshot.user_id == user.id)
         .order_by(StudentAcademicSnapshot.fetched_at.desc())
         .limit(1)
     )
+    cache_key, owner_hash = _plan_cache_key(user.id, body, snapshot)
+    cached = await _cached_plan(cache_key)
+    if cached is not None:
+        return {
+            **cached,
+            "cache_hit": True,
+            "duration_ms": round((time.monotonic() - started_at) * 1000),
+        }
     agent_record = await manager.get_agent_or_404(db, user.id)
     lock_owner = f"schedule-{uuid4()}"
     if not await manager.acquire_turn_lock(db, agent_record, lock_owner):
@@ -290,7 +361,7 @@ async def ai_schedule_plan(
             if isinstance(warning, str)
             and not re.search(r"section|meeting time|şube|ders saat", warning, re.IGNORECASE)
         ]
-        return {
+        response = {
             "courses": [
                 course
                 for course in (raw_courses if isinstance(raw_courses, list) else [])
@@ -298,7 +369,11 @@ async def ai_schedule_plan(
             ],
             "warnings": warnings,
             "source": "ai_verified",
+            "cache_hit": False,
+            "duration_ms": round((time.monotonic() - started_at) * 1000),
         }
+        await _store_plan(cache_key, owner_hash, response)
+        return response
     except TimeoutError as exc:
         raise HTTPException(status.HTTP_504_GATEWAY_TIMEOUT, "Course recommendation timed out; try again") from exc
     except HTTPException:

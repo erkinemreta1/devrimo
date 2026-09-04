@@ -1,3 +1,5 @@
+import hashlib
+import json
 from datetime import UTC, datetime
 from typing import Any, Literal
 from uuid import UUID
@@ -10,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.dependencies import get_current_user
 from app.auth.jwt import AuthenticatedUser
 from app.campus.course_info import forget_user
-from app.db.models import StudentAcademicSnapshot, StudentContext, UserPreference, UserUpdateState
+from app.db.models import ScheduleDataCache, StudentAcademicSnapshot, StudentContext, UserPreference, UserUpdateState
 from app.db.session import get_db
 from app.logging import get_logger
 from app.planning.groups import get_course_group
@@ -153,6 +155,8 @@ async def academic_data_delete(
 ) -> dict:
     await db.execute(delete(StudentAcademicSnapshot).where(StudentAcademicSnapshot.user_id == user.id))
     await db.execute(delete(StudentContext).where(StudentContext.user_id == user.id))
+    owner_hash = hashlib.sha256(json.dumps(str(user.id), ensure_ascii=True).encode()).hexdigest()
+    await db.execute(delete(ScheduleDataCache).where(ScheduleDataCache.owner_hash == owner_hash))
     await db.commit()
     # Removing the rows is not enough on its own: the catalog cache still holds
     # answers derived from this student's department until they expire.
