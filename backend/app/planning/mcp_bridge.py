@@ -5,6 +5,7 @@ the connected SAIS functions directly, normalizes their structured results,
 and persists only the typed private snapshot used by deterministic code.
 """
 
+import re
 from collections.abc import AsyncIterator, Iterable
 from contextlib import asynccontextmanager
 from typing import Any
@@ -146,13 +147,77 @@ async def refresh_from_sais(user_id: UUID, term: str, connected: list[MCPTools])
     return True
 
 
+_DEGREE_LEVELS = (
+    ("bachelor", "undergraduate"),
+    ("lisans", "undergraduate"),
+    ("master", "masters"),
+    ("yuksek", "masters"),
+    ("doctora", "doctoral"),
+    ("doktora", "doctoral"),
+    ("phd", "doctoral"),
+    ("exchange", "exchange"),
+)
+
+
+def _labelled_value(value: Any, *fragments: str) -> str | None:
+    """First scalar whose key contains every fragment, ignoring punctuation.
+
+    SAIS labels its fields for people rather than for programs — ``"Program
+    Code / Name"``, ``"Education Level / Semester No"`` — so an exact key
+    lookup finds nothing at all. Matching on fragments survives both the
+    spacing and the tr/en locale switch.
+    """
+    if isinstance(value, dict):
+        for key, child in value.items():
+            normalized = re.sub(r"[^a-z0-9]", "", str(key).casefold())
+            if all(fragment in normalized for fragment in fragments) and isinstance(child, (str, int, float)):
+                text = str(child).strip()
+                if text:
+                    return text
+        for child in value.values():
+            if (found := _labelled_value(child, *fragments)) is not None:
+                return found
+    elif isinstance(value, list):
+        for child in value:
+            if (found := _labelled_value(child, *fragments)) is not None:
+                return found
+    return None
+
+
+def _degree_level(text: str | None) -> str | None:
+    """Map SAIS's wording onto the vocabulary the profile UI offers."""
+    if not text:
+        return None
+    normalized = re.sub(r"[^a-z]", "", text.casefold())
+    for fragment, level in _DEGREE_LEVELS:
+        if fragment in normalized:
+            return level
+    return "other"
+
+
 async def _apply_student_info(db: AsyncSession, user_id: UUID, student_info: Any) -> None:
+    department = str(_find_value(student_info, {"department", "bolum"}) or "") or None
+    program_code = str(_find_value(student_info, {"program_code", "program"}) or "") or None
+    degree_level = str(_find_value(student_info, {"degree_level", "level", "program_level"}) or "") or None
+
+    # SAIS reports the programme as a single "code/name" field, so the code and
+    # the department name have to be split back out of it.
+    if (combined := _labelled_value(student_info, "program", "code")) is not None:
+        code, separator, name = combined.partition("/")
+        program_code = program_code or code.strip() or None
+        if separator:
+            department = department or name.strip() or None
+
+    if degree_level is None:
+        level = _labelled_value(student_info, "education", "level")
+        degree_level = _degree_level(level.split("/")[0] if level else None)
+
     await apply_verified_context(
         db,
         user_id,
-        department=str(_find_value(student_info, {"department", "bolum"}) or "") or None,
-        degree_level=str(_find_value(student_info, {"degree_level", "level", "program_level"}) or "") or None,
-        program_code=str(_find_value(student_info, {"program_code", "program"}) or "") or None,
+        department=department,
+        degree_level=degree_level,
+        program_code=program_code,
         campus=str(_find_value(student_info, {"campus", "yerleske"}) or "") or None,
     )
 

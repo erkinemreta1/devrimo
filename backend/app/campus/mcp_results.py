@@ -17,8 +17,27 @@ def mcp_payload(result: Any) -> Any:
     metadata = getattr(result, "metadata", None) or {}
     structured = metadata.get("structured_content")
     if structured is not None:
-        return structured
+        return _unwrap_envelope(structured)
     return _unwrap_content(getattr(result, "content", result))
+
+
+def _unwrap_envelope(value: Any) -> Any:
+    """Unwrap a single-key wrapper whose only value is a JSON document.
+
+    FastMCP wraps a tool that returns a *string* in a one-key envelope
+    ("result"), and for these servers that string is itself the document. The
+    wrapper arrives on the typed ``structured_content`` path as readily as on
+    the text path, so both have to unwrap it -- reading the structured payload
+    and stopping there is what left the SAIS student profile looking empty
+    when every field was in fact right there, one parse down.
+    """
+    if isinstance(value, dict) and len(value) == 1:
+        only = next(iter(value.values()))
+        if isinstance(only, str):
+            parsed = parse_json_document(only)
+            if not isinstance(parsed, str):
+                return parsed
+    return value
 
 
 def parse_json_document(text: str) -> Any:
@@ -57,4 +76,5 @@ def _unwrap_content(content: Any) -> Any:
         nested = content.get("content")
         if nested is not None:
             return _unwrap_content(nested)
+        return _unwrap_envelope(content)
     return content

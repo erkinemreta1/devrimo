@@ -122,7 +122,7 @@ function AssistantThread({
   const [telemetry] = useState(() => new ChatTelemetry());
   const [pendingConfirmation, setPendingConfirmation] = useState<ChatConfirmation | null>(null);
   const [confirmationPending, setConfirmationPending] = useState(false);
-  const { pick } = useLocale();
+  const { pick, locale } = useLocale();
 
   const runtime = useChatRuntime({
     id: threadId,
@@ -181,7 +181,7 @@ function AssistantThread({
       captureError(error, { source: "chat_stream", error_code: streamError?.code ?? null });
       toast.error(
         busy
-          ? "Your agent is answering another message. Please wait."
+          ? pick({ tr: "Asistan şu anda önceki yanıtını hazırlıyor. Lütfen bekle.", en: "Your assistant is still responding to the previous message. Please wait." })
           : message,
       );
     },
@@ -227,6 +227,10 @@ function AssistantThread({
     }
   }
 
+  const actionTitle = requirement?.tool?.includes("send_mail")
+    ? pick({ tr: "E-posta Gönderme Onayı", en: "Send Email Confirmation" })
+    : pick({ tr: "İşlem Onayı", en: "Action Confirmation" });
+
   return (
     <>
       <AssistantRuntimeProvider runtime={runtime}>
@@ -235,26 +239,33 @@ function AssistantThread({
       <AlertDialog open={Boolean(pendingConfirmation)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>
-              {pick({ tr: "Bu işlem çalıştırılsın mı?", en: "Run this action?" })}
-            </AlertDialogTitle>
+            <AlertDialogTitle>{actionTitle}</AlertDialogTitle>
             <AlertDialogDescription>
               {pick({
-                tr: `${requirement?.tool ?? "Araç"} aracına gönderilecek bilgileri dikkatlice kontrol et.`,
-                en: `Review the information that will be sent to ${requirement?.tool ?? "this tool"}.`,
+                tr: "Yapılacak işlemi ve bilgileri kontrol edip onayla.",
+                en: "Please review the action details before confirming.",
               })}
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <pre className="max-h-72 overflow-auto whitespace-pre-wrap rounded-lg bg-muted p-3 text-xs">
-            {JSON.stringify(requirement?.arguments ?? {}, null, 2)}
-          </pre>
+          <div className="max-h-72 space-y-2 overflow-auto rounded-lg border bg-muted/40 p-3 text-xs">
+            {requirement?.arguments && typeof requirement.arguments === "object" ? (
+              Object.entries(requirement.arguments as Record<string, unknown>).map(([k, v]) => (
+                <div key={k} className="flex flex-col gap-0.5">
+                  <span className="font-semibold text-foreground/80 capitalize">{k.replace(/_/g, " ")}:</span>
+                  <span className="whitespace-pre-wrap text-muted-foreground">{typeof v === "object" ? JSON.stringify(v, null, 2) : String(v)}</span>
+                </div>
+              ))
+            ) : (
+              <pre className="whitespace-pre-wrap">{JSON.stringify(requirement?.arguments ?? {}, null, 2)}</pre>
+            )}
+          </div>
           <AlertDialogFooter>
             <AlertDialogCancel disabled={confirmationPending} onClick={() => void resolveConfirmation(false)}>
-              {pick({ tr: "Reddet", en: "Reject" })}
+              {pick({ tr: "Vazgeç", en: "Cancel" })}
             </AlertDialogCancel>
             <AlertDialogAction disabled={confirmationPending} onClick={() => void resolveConfirmation(true)}>
               {confirmationPending ? <Loader2Icon className="animate-spin" /> : null}
-              {pick({ tr: "Onayla ve çalıştır", en: "Approve and run" })}
+              {pick({ tr: "Onayla", en: "Approve" })}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

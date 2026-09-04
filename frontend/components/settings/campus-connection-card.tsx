@@ -163,7 +163,7 @@ export function CampusConnectionCard() {
             <section aria-labelledby="credentials-heading" className="space-y-4">
               <div>
                 <h2 id="credentials-heading" className="text-sm font-semibold">{pick({ tr: "Bağlantı bilgileri", en: "Connection details" })}</h2>
-                <p className="mt-1 text-xs text-muted-foreground">{pick({ tr: "Şifren şifrelenir, bu ekrana geri gönderilmez ve sohbet geçmişine yazılmaz.", en: "Your password is encrypted, never returned to this screen, and never written to chat history." })}</p>
+                <p className="mt-1 text-xs text-muted-foreground">{pick({ tr: "Şifren güvenli şekilde saklanır ve kimseyle paylaşılmaz.", en: "Your password is stored securely and never shared." })}</p>
               </div>
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-2">
@@ -183,21 +183,20 @@ export function CampusConnectionCard() {
                 <p className="mt-1 text-xs leading-5 text-muted-foreground">{pick({ tr: "Yalnızca kullanmak istediğin bilgi kaynaklarına izin ver. Bu seçimler istediğin zaman değiştirilebilir.", en: "Allow only the information sources you want to use. You can change these choices at any time." })}</p>
               </div>
 
-              <div className="grid grid-cols-[auto_1fr_auto] gap-3 rounded-xl border border-primary/20 bg-primary/[0.035] p-4">
+              <div className="grid grid-cols-[auto_1fr] gap-3 rounded-xl border border-primary/20 bg-primary/[0.035] p-4">
                 <span className="grid size-9 place-items-center rounded-lg bg-primary/10 text-primary"><BookOpenCheckIcon className="size-4" /></span>
                 <div>
                   <div className="flex flex-wrap items-center gap-2">
                     <p className="text-sm font-semibold">{pick({ tr: "Ders programı ve akademik kayıt", en: "Schedule and academic record" })}</p>
                     <Badge variant="secondary" className="text-[10px]">{pick({ tr: "Bağlantıya dahil", en: "Included" })}</Badge>
                   </div>
-                  <p className="mt-1 text-sm leading-5 text-muted-foreground">{pick({ tr: "Program, transkript, not ortalaması ve ders kataloğu bilgilerini yalnızca okur.", en: "Reads schedule, transcript, GPA, and course-catalog information." })}</p>
+                  <p className="mt-1 text-sm leading-5 text-muted-foreground">{pick({ tr: "Program, transkript, not ortalaması ve ders kataloğu bilgileri kullanılır.", en: "Uses schedule, transcript, GPA, and course-catalog information." })}</p>
                 </div>
-                <Badge variant="outline" className="mt-1 text-[10px] text-muted-foreground">{pick({ tr: "Salt okunur", en: "Read-only" })}</Badge>
               </div>
 
-              <DataAccessChoice id="allow-odtuclass" icon={GraduationCapIcon} title="ODTÜClass" description={pick({ tr: "Kayıtlı dersler, duyurular, izlenceler ve yaklaşan teslim tarihleri.", en: "Enrolled courses, announcements, syllabi, and upcoming deadlines." })} detail={pick({ tr: "Salt okunur. Açmadığın sürece ODTÜClass bilgilerine erişilmez.", en: "Read-only. ODTÜClass information is not accessed unless you allow it." })} checked={privacy.odtuclass} disabled={busy} optionalLabel={pick({ tr: "İsteğe bağlı", en: "Optional" })} onCheckedChange={(checked) => setPrivacyDraft({ ...privacy, odtuclass: checked })} />
+              <DataAccessChoice id="allow-odtuclass" icon={GraduationCapIcon} title="ODTÜClass" description={pick({ tr: "Kayıtlı dersler, duyurular, izlenceler ve yaklaşan teslim tarihleri.", en: "Enrolled courses, announcements, syllabi, and upcoming deadlines." })} detail={pick({ tr: "Yalnızca izin verdiğinde ODTÜClass bilgilerin kullanılır.", en: "ODTÜClass information is accessed only when enabled." })} checked={privacy.odtuclass} disabled={busy} optionalLabel={pick({ tr: "İsteğe bağlı", en: "Optional" })} onCheckedChange={(checked) => setPrivacyDraft({ ...privacy, odtuclass: checked })} />
 
-              <DataAccessChoice id="allow-webmail" icon={MailIcon} title={pick({ tr: "ODTÜ e-postası", en: "METU email" })} description={pick({ tr: "E-postaları okuma ve arama; ileti gönderme veya yanıtlama.", en: "Read and search email; send or reply to messages." })} detail={pick({ tr: "Gönderme ve yanıtlama her zaman tam iletiyi gösteren ayrı bir onay ister. E-posta silinemez, taşınamaz veya iletilemez.", en: "Sending and replying always require separate approval showing the exact message. Email cannot be deleted, moved, or forwarded." })} checked={privacy.webmail} disabled={busy} optionalLabel={pick({ tr: "İsteğe bağlı", en: "Optional" })} onCheckedChange={(checked) => setPrivacyDraft({ ...privacy, webmail: checked })} />
+              <DataAccessChoice id="allow-webmail" icon={MailIcon} title={pick({ tr: "ODTÜ e-postası", en: "METU email" })} description={pick({ tr: "E-postaları okuma ve arama; ileti gönderme veya yanıtlama.", en: "Read and search email; send or reply to messages." })} detail={pick({ tr: "E-posta göndermeden veya yanıtlamadan önce her zaman onayını ister.", en: "Always asks for your confirmation before sending or replying to an email." })} checked={privacy.webmail} disabled={busy} optionalLabel={pick({ tr: "İsteğe bağlı", en: "Optional" })} onCheckedChange={(checked) => setPrivacyDraft({ ...privacy, webmail: checked })} />
             </section>
 
             <div className="flex flex-wrap items-center gap-2 border-t pt-5">
@@ -225,7 +224,7 @@ export function CampusConnectionCard() {
 
             <p className="flex items-start gap-2 text-[11px] leading-4 text-muted-foreground">
               <LockIcon className="mt-0.5 size-3.5 shrink-0" />
-              <span>{pick({ tr: "Her öğrencinin bağlantısı ayrı tutulur. İçerikler yönetici ekranlarında gösterilmez ve başka öğrencilerle paylaşılmaz.", en: "Each student's connection is isolated. Contents are not shown in admin views or shared with other students." })}</span>
+              <span>{pick({ tr: "Bağlantın ve verilerin yalnızca sana özeldir.", en: "Your connection and data are private to you." })}</span>
             </p>
           </>
         )}

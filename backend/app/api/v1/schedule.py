@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agents import manager
 from app.auth.dependencies import get_current_user
 from app.auth.jwt import AuthenticatedUser
+from app.campus import service as campus_service
 from app.campus.course_info import (
     call_course_info,
     department_for_course,
@@ -39,6 +40,11 @@ logger = get_logger(__name__)
 # so the schedule page mounting must not be able to start one per render. The
 # outcome is remembered either way: a student whose SAIS reports no department
 # would otherwise pay for four subprocess launches on every page view.
+#
+# Keyed by campus credential revision, not by user alone. Remembering a failure
+# is the point, but a student who fails this lookup, connects METU, and comes
+# back must not be told "no department" for the rest of the window — connecting
+# bumps the revision, which retires the old key on the spot.
 _context_syncs = TTLCache(ttl_seconds=5 * 60, max_entries=1024)
 
 _AGENT_RUN_TIMEOUT_SECONDS = 180
@@ -89,7 +95,8 @@ async def student_context(
     if context is None or not (context.department or context.program_code):
         # Single-flight: concurrent mounts of the schedule page wait on one
         # sync instead of each spawning the student's campus servers.
-        await _context_syncs.run(str(user.id), lambda: _sync_context(user.id))
+        revision = await campus_service.credential_revision(db, user.id)
+        await _context_syncs.run((str(user.id), revision), lambda: _sync_context(user.id))
         await db.rollback()
         context = await db.get(StudentContext, user.id)
 

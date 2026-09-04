@@ -41,6 +41,22 @@ def test_single_text_block_is_parsed_as_the_payload():
     assert mcp_payload(result) == {"sections": [{"section": "1"}]}
 
 
+def test_single_key_envelope_is_unwrapped_on_the_structured_path():
+    """FastMCP wraps a string-returning tool in {"result": "<document>"}.
+
+    The envelope arrives on the typed metadata path too, and stopping at the
+    structured payload is what made the SAIS student profile look empty.
+    """
+    profile = '{"Program Code / Name": "236/Mathematics", "Program Type": "MAJOR"}'
+    result = _Result(structured={"result": profile})
+    assert mcp_payload(result) == {"Program Code / Name": "236/Mathematics", "Program Type": "MAJOR"}
+
+
+def test_a_single_key_envelope_holding_plain_text_is_left_alone():
+    result = _Result(structured={"result": "no courses found"})
+    assert mcp_payload(result) == {"result": "no courses found"}
+
+
 def test_several_text_blocks_are_left_alone():
     """Two blocks are a list of results, not one document rendered twice."""
     content = [{"type": "text", "text": "first"}, {"type": "text", "text": "second"}]

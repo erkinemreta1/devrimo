@@ -298,8 +298,8 @@ export function OnboardingFlow({ onDone }: { onDone?: () => void }) {
             <div className="text-xs leading-5 text-muted-foreground">
               <p>
                 {pick({
-                  tr: "Şifren şifrelenerek saklanır ve yalnızca senin ODTÜ bağlantın için kullanılır. Arayüze bir daha geri gönderilmez, asistanın sohbet geçmişine yazılmaz.",
-                  en: "Your password is stored encrypted and used only for your own METU connection. It is never sent back to this interface or written into chat history.",
+                  tr: "Şifren güvenli şekilde saklanır ve yalnızca ODTÜ bağlantın için kullanılır. Kimseyle paylaşılmaz.",
+                  en: "Your password is stored securely and used only for your METU connection. It is never shared.",
                 })}
               </p>
               <p className="mt-2">
@@ -401,10 +401,10 @@ export function OnboardingFlow({ onDone }: { onDone?: () => void }) {
           <div className="mt-5 flex flex-col gap-3">
             <div className="grid grid-cols-[auto_1fr] gap-3 rounded-xl border border-primary/20 bg-primary/[0.035] p-4">
               <span className="grid size-9 place-items-center rounded-lg bg-primary/10 text-primary"><BookOpenCheckIcon className="size-4" /></span>
-              <div><p className="text-sm font-semibold">{pick({ tr: "Ders programı ve akademik kayıt", en: "Schedule and academic record" })}</p><p className="mt-1 text-xs leading-5 text-muted-foreground">{pick({ tr: "Program, transkript, not ortalaması ve ders kataloğu. Salt okunur ve hesap bağlantısına dahildir.", en: "Schedule, transcript, GPA, and course catalog. Read-only and included with the account connection." })}</p></div>
+              <div><p className="text-sm font-semibold">{pick({ tr: "Ders programı ve akademik kayıt", en: "Schedule and academic record" })}</p><p className="mt-1 text-xs leading-5 text-muted-foreground">{pick({ tr: "Program, transkript, not ortalaması ve ders kataloğu.", en: "Schedule, transcript, GPA, and course catalog." })}</p></div>
             </div>
-            <DataAccessChoice id="onboarding-odtuclass" icon={GraduationCapIcon} title="ODTÜClass" description={pick({ tr: "Kayıtlı dersler, duyurular, izlenceler ve teslim tarihleri.", en: "Enrolled courses, announcements, syllabi, and deadlines." })} detail={pick({ tr: "Salt okunur. İzin vermediğin sürece erişilmez.", en: "Read-only. It is not accessed unless you allow it." })} checked={privacy.odtuclass} disabled={busy || !connection?.connected} optionalLabel={pick({ tr: "İsteğe bağlı", en: "Optional" })} onCheckedChange={(checked) => setPrivacyDraft({ ...privacy, odtuclass: checked })} />
-            <DataAccessChoice id="onboarding-webmail" icon={MailIcon} title={pick({ tr: "ODTÜ e-postası", en: "METU email" })} description={pick({ tr: "E-postaları okuma ve arama; ileti gönderme veya yanıtlama.", en: "Read and search email; send or reply to messages." })} detail={pick({ tr: "Gönderme ve yanıtlama her zaman tam iletiyi gösteren ayrı onay ister. Silme, taşıma ve iletme yapılamaz.", en: "Sending and replying always require separate approval showing the exact message. Deleting, moving, and forwarding are unavailable." })} checked={privacy.webmail} disabled={busy || !connection?.connected} optionalLabel={pick({ tr: "İsteğe bağlı", en: "Optional" })} onCheckedChange={(checked) => setPrivacyDraft({ ...privacy, webmail: checked })} />
+            <DataAccessChoice id="onboarding-odtuclass" icon={GraduationCapIcon} title="ODTÜClass" description={pick({ tr: "Kayıtlı dersler, duyurular, izlenceler ve teslim tarihleri.", en: "Enrolled courses, announcements, syllabi, and deadlines." })} detail={pick({ tr: "İzin vermediğin sürece ODTÜClass bilgilerine erişilmez.", en: "ODTÜClass is not accessed unless you allow it." })} checked={privacy.odtuclass} disabled={busy || !connection?.connected} optionalLabel={pick({ tr: "İsteğe bağlı", en: "Optional" })} onCheckedChange={(checked) => setPrivacyDraft({ ...privacy, odtuclass: checked })} />
+            <DataAccessChoice id="onboarding-webmail" icon={MailIcon} title={pick({ tr: "ODTÜ e-postası", en: "METU email" })} description={pick({ tr: "E-postaları okuma ve arama; ileti gönderme veya yanıtlama.", en: "Read and search email; send or reply to messages." })} detail={pick({ tr: "E-posta göndermeden veya yanıtlamadan önce her zaman onayını ister.", en: "Always asks for your confirmation before sending or replying to an email." })} checked={privacy.webmail} disabled={busy || !connection?.connected} optionalLabel={pick({ tr: "İsteğe bağlı", en: "Optional" })} onCheckedChange={(checked) => setPrivacyDraft({ ...privacy, webmail: checked })} />
           </div>
 
           {formError ? <p className="mt-3 text-sm text-destructive">{formError}</p> : null}
