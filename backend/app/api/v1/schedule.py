@@ -19,7 +19,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -77,10 +77,14 @@ class AiScheduleCourse(BaseModel):
 
 
 class AiScheduleRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     # Kept for compatibility with already-open browser tabs. The server ignores
     # it and reads the setup-owned StudentContext instead.
     department: str | None = Field(default=None, max_length=20)
-    semester: str = Field(min_length=4, max_length=20)
+    semester: str = Field(
+        min_length=4, max_length=20, validation_alias=AliasChoices("semester", "term")
+    )
     courses: list[AiScheduleCourse] = Field(default_factory=list, max_length=20)
 
 
@@ -382,7 +386,12 @@ async def search_departments(
     data = await call_course_info(db, user.id, "search_departments", {"query": query})
     # ``departments`` is the normalized list the schedule page's picker binds to;
     # ``data`` stays for callers that want the untouched catalog payload.
-    return {"data": data, "departments": department_options(data)}
+    # The catalog source matches a code or an English name. A student typing the
+    # abbreviation ("CENG") or a Turkish name ("Bilgisayar") got an empty picker
+    # for departments that plainly exist, so the directory answers when the
+    # source misses.
+    options = department_options(data) or _directory_department_options(query)
+    return {"data": data, "departments": options}
 
 
 @router.get("/courses")
@@ -415,6 +424,30 @@ async def _expand_course(
     return compact, owner.code
 
 
+def _course_code_matches(course: dict, digits: str) -> bool:
+    """Whether a typed digit string names this course.
+
+    Three forms have to land: the short code ("CENG331"), the seven-digit code
+    ("5710331") and a bare number ("331"). The old comparison looked only at the
+    last four digits, so a pasted seven-digit code matched nothing, and the
+    free-text gate rejected "CENG 331" because the stored haystack is "ceng331"
+    with no space - both spellings a student actually types.
+    """
+    if not digits:
+        return True
+    full = re.sub(r"[^0-9]", "", str(course.get("full_code") or ""))
+    short = re.sub(r"[^0-9]", "", str(course.get("code") or ""))
+    if len(digits) >= 7:
+        return full == digits or short == digits
+    if short.startswith(digits) or short.endswith(digits):
+        return True
+    if len(full) == 7:
+        trimmed = full[3:].lstrip("0") or "0"
+        if trimmed.startswith(digits) or full.startswith(digits):
+            return True
+    return False
+
+
 def _short_code(full_code: str, abbreviation: str) -> str:
     """``("2400101", "HIST")`` -> ``"HIST101"``.
 
@@ -442,6 +475,26 @@ def _search_fold(text: str) -> str:
     is the normal case rather than the exception.
     """
     return str(text).translate(_SEARCH_FOLD).casefold()
+
+
+def _directory_department_options(query: str) -> list[dict]:
+    """Departments whose abbreviation or name matches, straight from the directory.
+
+    Lists every candidate rather than resolving to one: "Bilgisayar" names both
+    Computer Engineering and Computer Education, and the picker should show both
+    instead of guessing or returning nothing.
+    """
+    wanted = _search_fold(query)
+    if not wanted:
+        return []
+    found = [
+        {"code": department.code, "name": department.name_en or department.name_tr}
+        for department in departments.all_departments()
+        if wanted in _search_fold(department.abbreviation)
+        or wanted in _search_fold(department.name_en)
+        or wanted in _search_fold(department.name_tr)
+    ]
+    return found[:20]
 
 
 async def _published_search_index(
@@ -521,22 +574,18 @@ async def search_courses(
         indexed, covered = await _published_search_index(db, user.id, semester)
         wanted = _search_fold(typed)
         if named is not None or (digits and not letters):
+            # A code lookup is answered by the code itself, never by the folded
+            # haystack: "CENG 331" must not have to appear inside the stored
+            # "ceng331 ...", and a pasted seven-digit code has to match its full
+            # form rather than only its last four digits.
             matches = [
                 course
-                for haystack, course in indexed
-                if (
-                    not digits
-                    or re.sub(r"[^0-9]", "", course["code"]).startswith(digits)
-                    or re.sub(r"[^0-9]", "", course["full_code"])[3:].startswith(digits)
-                )
-                and (not wanted or wanted in haystack)
+                for _, course in indexed
+                if _course_code_matches(course, digits)
+                and (named is None or course["department"] in {named.abbreviation, named.code})
             ]
-            if named is not None:
-                matches = [
-                    course
-                    for course in matches
-                    if course["department"] in {named.abbreviation, named.code}
-                ]
+            if home is not None:
+                matches.sort(key=lambda item: item["department"] != (home.abbreviation or home.code))
             return {
                 "courses": matches[:40],
                 "searched_departments": len(covered),
@@ -739,16 +788,25 @@ async def course_sections(
 
 
 class BulkConstraintsRequest(BaseModel):
-    semester: str = Field(min_length=1, max_length=20)
+    # `term` and `course_codes` are accepted as spellings of the same fields.
+    # The API grew both names for one thing - and so did the failures: an agent
+    # sending the other spelling got "A semester/term is required" for a request
+    # that named the term. The validation alias is invisible in the schema, so
+    # the published contract keeps one name while both keep working.
+    model_config = ConfigDict(populate_by_name=True)
+
+    semester: str = Field(min_length=1, max_length=20, validation_alias=AliasChoices("semester", "term"))
     # The curriculum is a couple of dozen courses at most. The cap is here so a
     # crafted request cannot turn one HTTP call into hundreds of SAIS fetches.
-    courses: list[str] = Field(min_length=1, max_length=40)
+    courses: list[str] = Field(min_length=1, max_length=40, validation_alias=AliasChoices("courses", "course_codes"))
     department: str | None = Field(default=None, max_length=20)
 
 
 class BulkSectionsRequest(BaseModel):
-    semester: str = Field(min_length=1, max_length=20)
-    courses: list[str] = Field(min_length=1, max_length=40)
+    model_config = ConfigDict(populate_by_name=True)
+
+    semester: str = Field(min_length=1, max_length=20, validation_alias=AliasChoices("semester", "term"))
+    courses: list[str] = Field(min_length=1, max_length=40, validation_alias=AliasChoices("courses", "course_codes"))
     department: str | None = Field(default=None, max_length=20)
 
 

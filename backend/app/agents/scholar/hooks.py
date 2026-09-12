@@ -20,6 +20,9 @@ import time
 from typing import Any
 from uuid import UUID, uuid4
 
+from fastapi import HTTPException
+
+from app.agents.scholar.results import project
 from app.db.models import AgentToolAudit
 from app.db.session import SessionLocal
 from app.logging import get_logger
@@ -28,7 +31,10 @@ from app.observability.client import _scrub
 from app.observability.llm import current_session_id, current_trace_id
 
 logger = get_logger(__name__)
-MAX_TOOL_RESULT_CHARS = 16_000
+# Six thousand characters is still several times the largest answer the model
+# needs to write, and every result is re-sent on each later model step of the
+# turn, so the old 16k was carried forward at four times the necessary cost.
+MAX_TOOL_RESULT_CHARS = 6_000
 MUTATING_TOOL_NAMES = {"webmail_send_email", "webmail_reply_email", "send_email", "update", "undo"}
 # Span payloads are bounded separately from tool results: a 16k result is
 # fine for the model but wasteful on every span.
@@ -226,7 +232,7 @@ async def production_tool_hook(function_name, function, arguments, run_context=N
         if inspect.isawaitable(result):
             result = await result
         logger.info("agent_tool_completed", tool=function_name, duration_ms=round((time.monotonic() - started) * 1000))
-        result = _bound_result(result)
+        result = _bound_result(project(result))
         return result
     except Exception as exc:
         error = exc
@@ -255,6 +261,12 @@ async def production_tool_hook(function_name, function, arguments, run_context=N
             tool_server=_tool_server(function_name),
             **{"$exception_fingerprint": ["agent_tool_failed", _tool_server(function_name) or function_name]},
         )
+        if getattr(exc, "exceptions", None):
+            # A task-group wrapper reaches the model as "unhandled errors in a
+            # TaskGroup (1 sub-exception)", which it cannot act on - one read
+            # was retried seven times over exactly that sentence. Raise the real
+            # message instead.
+            raise HTTPException(status_code=502, detail=_tool_error_detail(exc)) from exc
         raise
     finally:
         _capture_tool_span(
